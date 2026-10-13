@@ -69,6 +69,7 @@
   <canvas id="canvas" hidden></canvas>
   <img id="preview" alt="Photo preview" hidden>
   <button id="retake" hidden>Retake Photo</button>
+  <button id="usePhoto" hidden>Use This Photo</button>
 
   <p id="status">Ready to test.</p>
 </main>
@@ -78,6 +79,29 @@ const $ = id => document.getElementById(id);
 let stream = null;
 let facing = 'environment';
 let photoUrl = null;
+let selectedPhotoData = null;
+
+$('usePhoto').addEventListener('click', () => {
+  if (!selectedPhotoData) {
+    status('Please capture or select a photo first.');
+    return;
+  }
+
+  if (!window.opener || window.opener.closed) {
+    status('Registration page not found. Please reopen the camera from the registration form.');
+    return;
+  }
+
+  window.opener.postMessage(
+    {
+      type: 'NSA_PASSPORT_PHOTO',
+      dataUrl: selectedPhotoData
+    },
+    '*'
+  );
+
+  status('Photo sent to the registration page. You may close this tab.');
+});
 
 function status(message) {
   $('status').textContent = message;
@@ -123,16 +147,35 @@ function stopCamera(showMessage = true) {
 
 function showPhoto(file) {
   if (!file) return;
+
   if (!file.type.startsWith('image/')) {
     status('Please select an image.');
     return;
   }
-  if (photoUrl) URL.revokeObjectURL(photoUrl);
-  photoUrl = URL.createObjectURL(file);
-  $('preview').src = photoUrl;
-  $('preview').hidden = false;
-  $('retake').hidden = false;
-  status('Photo loaded: ' + file.name);
+
+  if (file.size > 10 * 1024 * 1024) {
+    status('Please select a photo smaller than 10 MB.');
+    return;
+  }
+
+  const reader = new FileReader();
+
+  reader.onload = function(e) {
+    selectedPhotoData = e.target.result;
+
+    $('preview').src = selectedPhotoData;
+    $('preview').hidden = false;
+    $('retake').hidden = false;
+    $('usePhoto').hidden = false;
+
+    status('Photo ready. Review it, retake it, or use this photo.');
+  };
+
+  reader.onerror = function() {
+    status('Could not read this photo. Please try another image.');
+  };
+
+  reader.readAsDataURL(file);
 }
 
 $('start').addEventListener('click', startCamera);
