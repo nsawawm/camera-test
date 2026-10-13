@@ -58,9 +58,9 @@
   <button id="stop" hidden>Stop Camera</button>
 
   <h3>Or use a photo</h3>
-  <label for="cameraFile">Take a New Photo</label>
-  <input id="cameraFile" type="file"
-         accept="image/*" capture="environment">
+  <button type="button" id="takeNewPhoto">
+  Take a New Photo
+  </button>
 
   <label for="galleryFile">Upload Existing Photo</label>
   <input id="galleryFile" type="file" accept="image/*">
@@ -136,6 +136,11 @@ function showPhoto(file) {
 }
 
 $('start').addEventListener('click', startCamera);
+  $('takeNewPhoto').addEventListener('click', () => {
+  $('preview').hidden = true;
+  $('retake').hidden = true;
+  startCamera();
+});
 $('stop').addEventListener('click', () => stopCamera());
 $('switch').addEventListener('click', async () => {
   facing = facing === 'environment' ? 'user' : 'environment';
@@ -159,8 +164,6 @@ $('capture').addEventListener('click', () => {
   }, 'image/jpeg', 0.9);
 });
 
-$('cameraFile').addEventListener('change', e =>
-  showPhoto(e.target.files[0]));
 $('galleryFile').addEventListener('change', e =>
   showPhoto(e.target.files[0]));
 
