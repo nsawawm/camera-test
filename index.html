@@ -1,0 +1,174 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Camera Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 25px auto;
+      padding: 16px;
+      background: #f3f5f7;
+    }
+    main {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+    }
+    button, label {
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+      padding: 14px;
+      margin: 12px 0;
+      border: 0;
+      border-radius: 7px;
+      background: #1769aa;
+      color: white;
+      text-align: center;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    video, img {
+      width: 100%;
+      margin-top: 12px;
+      background: #eee;
+      border-radius: 8px;
+    }
+    #status {
+      padding: 12px;
+      background: #eef2f6;
+      overflow-wrap: anywhere;
+    }
+    input[type=file] { display: none; }
+  </style>
+</head>
+<body>
+<main>
+  <h2>Device Camera Test</h2>
+  <p>Test live camera access on your phone or computer.</p>
+
+  <button id="start">Start Live Camera</button>
+  <button id="switch" hidden>Switch Camera</button>
+  <video id="video" autoplay playsinline muted hidden></video>
+  <button id="capture" hidden>Capture Photo</button>
+  <button id="stop" hidden>Stop Camera</button>
+
+  <h3>Or use a photo</h3>
+  <label for="cameraFile">Take a New Photo</label>
+  <input id="cameraFile" type="file"
+         accept="image/*" capture="environment">
+
+  <label for="galleryFile">Upload Existing Photo</label>
+  <input id="galleryFile" type="file" accept="image/*">
+
+  <h3>Preview</h3>
+  <canvas id="canvas" hidden></canvas>
+  <img id="preview" alt="Photo preview" hidden>
+  <button id="retake" hidden>Retake Photo</button>
+
+  <p id="status">Ready to test.</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let stream = null;
+let facing = 'environment';
+let photoUrl = null;
+
+function status(message) {
+  $('status').textContent = message;
+}
+
+async function startCamera() {
+  stopCamera(false);
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    status('Live camera API unavailable. Check HTTPS and browser support.');
+    return;
+  }
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facing } },
+      audio: false
+    });
+
+    $('video').srcObject = stream;
+    $('video').hidden = false;
+    await $('video').play();
+
+    $('capture').hidden = false;
+    $('stop').hidden = false;
+    $('switch').hidden = false;
+    status('SUCCESS: Live camera is working!');
+  } catch (e) {
+    status('Camera error: ' + e.name + ' — ' + e.message);
+  }
+}
+
+function stopCamera(showMessage = true) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  $('video').srcObject = null;
+  $('video').hidden = true;
+  $('capture').hidden = true;
+  $('stop').hidden = true;
+  $('switch').hidden = true;
+  if (showMessage) status('Camera stopped.');
+}
+
+function showPhoto(file) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    status('Please select an image.');
+    return;
+  }
+  if (photoUrl) URL.revokeObjectURL(photoUrl);
+  photoUrl = URL.createObjectURL(file);
+  $('preview').src = photoUrl;
+  $('preview').hidden = false;
+  $('retake').hidden = false;
+  status('Photo loaded: ' + file.name);
+}
+
+$('start').addEventListener('click', startCamera);
+$('stop').addEventListener('click', () => stopCamera());
+$('switch').addEventListener('click', async () => {
+  facing = facing === 'environment' ? 'user' : 'environment';
+  await startCamera();
+});
+
+$('capture').addEventListener('click', () => {
+  const v = $('video');
+  if (!v.videoWidth) return status('Wait for the video to load.');
+
+  const c = $('canvas');
+  c.width = v.videoWidth;
+  c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  c.toBlob(blob => {
+    if (!blob) return status('Could not capture photo.');
+    showPhoto(new File([blob], 'camera-photo.jpg',
+                       { type: 'image/jpeg' }));
+    stopCamera(false);
+    status('Photo captured! Review it or retake it.');
+  }, 'image/jpeg', 0.9);
+});
+
+$('cameraFile').addEventListener('change', e =>
+  showPhoto(e.target.files[0]));
+$('galleryFile').addEventListener('change', e =>
+  showPhoto(e.target.files[0]));
+
+$('retake').addEventListener('click', () => {
+  $('preview').hidden = true;
+  $('retake').hidden = true;
+  startCamera();
+});
+</script>
+</body>
+</html>
