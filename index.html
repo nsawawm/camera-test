@@ -1,220 +1,416 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Camera Test</title>
+  <title>NSA Camera</title>
   <style>
+    * { box-sizing: border-box; }
     body {
       font-family: Arial, sans-serif;
       max-width: 600px;
-      margin: 25px auto;
-      padding: 16px;
+      margin: 20px auto;
+      padding: 14px;
       background: #f3f5f7;
+      color: #17202a;
     }
     main {
-      background: white;
-      padding: 20px;
-      border-radius: 12px;
+      background: #fff;
+      padding: 18px;
+      border-radius: 14px;
+      box-shadow: 0 5px 20px rgba(0,0,0,.08);
     }
-    button, label {
+    h2 { margin: 0 0 10px; color: #006b3f; }
+    p { line-height: 1.45; }
+    button {
       display: block;
       width: 100%;
       box-sizing: border-box;
       padding: 14px;
       margin: 12px 0;
       border: 0;
-      border-radius: 7px;
-      background: #1769aa;
-      color: white;
+      border-radius: 9px;
+      background: #006b3f;
+      color: #fff;
       text-align: center;
       font-size: 16px;
+      font-weight: 700;
       cursor: pointer;
     }
+    button:disabled { opacity: .6; cursor: not-allowed; }
     video, img {
+      display: block;
       width: 100%;
       margin-top: 12px;
-      background: #eee;
-      border-radius: 8px;
+      background: #111;
+      border-radius: 9px;
     }
+    video { aspect-ratio: 4 / 3; object-fit: cover; }
+    #preview { background: #eee; }
     #status {
       padding: 12px;
       background: #eef2f6;
+      border-radius: 8px;
       overflow-wrap: anywhere;
+      line-height: 1.45;
     }
-    input[type=file] { display: none; }
+    .camera-stage { position: relative; }
+    .scan-frame {
+      position: absolute;
+      left: 7%;
+      top: 37%;
+      width: 86%;
+      height: 26%;
+      border: 3px solid #fcd116;
+      border-radius: 9px;
+      box-shadow: 0 0 0 1000px rgba(0,0,0,.13);
+      pointer-events: none;
+    }
+    .hint {
+      padding: 11px;
+      background: #edf7ed;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
 <main>
-  <h2>Device Camera Test</h2>
-  <p>Test live camera access on your phone or computer.</p>
+  <h2 id="heading">NSA Passport Camera</h2>
+  <p id="description">Take a passport photograph and send it back to the registration page.</p>
 
-  <button id="start">Start Live Camera</button>
-  <button id="switch" hidden>Switch Camera</button>
-  <video id="video" autoplay playsinline muted hidden></video>
-  <button id="capture" hidden>Capture Photo</button>
-  <button id="stop" hidden>Stop Camera</button>
+  <div id="passportInstructions" class="hint">
+    Allow camera access. When the camera is ready, tap <b>Take New Photo</b> to capture the image. Review it, then choose <b>Use This Photo</b> or <b>Retake Photo</b>.
+  </div>
 
-  <h3>Or use a photo</h3>
-  <button type="button" id="takeNewPhoto">
-  Take a New Photo
-  </button>
+  <div id="codeInstructions" class="hint" hidden>
+    Hold the complete six-character Office Capture Code inside the yellow frame. Keep the code in focus and hold the camera steady. The scanner will return the detected code to the monthly evaluation page.
+  </div>
 
-  <label for="galleryFile">Upload Existing Photo</label>
-  <input id="galleryFile" type="file" accept="image/*">
+  <div id="cameraStage" class="camera-stage" hidden>
+    <video id="video" autoplay playsinline muted></video>
+    <div id="scanFrame" class="scan-frame" hidden></div>
+  </div>
 
-  <h3>Preview</h3>
   <canvas id="canvas" hidden></canvas>
-  <img id="preview" alt="Photo preview" hidden>
-  <button id="retake" hidden>Retake Photo</button>
-  <button id="usePhoto" hidden>Use This Photo</button>
+  <img id="preview" alt="Photograph preview" hidden>
 
-  <p id="status">Ready to test.</p>
+  <!-- Passport mode has only these three action buttons. -->
+  <div id="passportButtons">
+    <button id="takeNewPhoto" type="button">Take New Photo</button>
+    <button id="retakePhoto" type="button" hidden>Retake Photo</button>
+    <button id="usePhoto" type="button" hidden>Use This Photo</button>
+  </div>
+
+  <!-- Code mode starts the camera automatically; this button is only a fallback. -->
+  <button id="startCodeScanner" type="button" hidden>Start Code Scanner</button>
+
+  <p id="status" role="status" aria-live="polite">Preparing camera...</p>
 </main>
 
 <script>
-const $ = id => document.getElementById(id);
-let stream = null;
-let facing = 'environment';
-let photoUrl = null;
-let selectedPhotoData = null;
+(function () {
+  "use strict";
 
-$('usePhoto').addEventListener('click', () => {
-  if (!selectedPhotoData) {
-    status('Please capture or select a photo first.');
-    return;
+  const $ = id => document.getElementById(id);
+  const params = new URLSearchParams(window.location.search);
+  const codeMode = params.get("mode") === "capture-code";
+
+  let stream = null;
+  let facing = "environment";
+  let selectedPhotoData = null;
+  let cameraBusy = false;
+  let scanActive = false;
+  let scanTimer = null;
+  let ocrWorker = null;
+  let ocrWorkerPromise = null;
+  let ocrScriptPromise = null;
+  let readingFrame = false;
+
+  function setStatus(message) {
+    $("status").textContent = message;
   }
 
-  if (!window.opener || window.opener.closed) {
-    status('Registration page not found. Please reopen the camera from the registration form.');
-    return;
+  function setupMode() {
+    if (codeMode) {
+      document.title = "NSA Office Capture Code Scanner";
+      $("heading").textContent = "Office Capture Code Scanner";
+      $("description").textContent = "Automatically read the six-character code for monthly evaluation.";
+      $("passportInstructions").hidden = true;
+      $("passportButtons").hidden = true;
+      $("codeInstructions").hidden = false;
+      $("scanFrame").hidden = false;
+      $("startCodeScanner").hidden = false;
+      $("startCodeScanner").textContent = "Start Code Scanner";
+      setStatus("Requesting camera access...");
+      startCodeCamera();
+    } else {
+      $("startCodeScanner").hidden = true;
+      setStatus("Starting camera for passport photography...");
+      // Try opening the camera on load. If permission requires a user action,
+      // the Take New Photo button will start it instead.
+      startPassportCamera();
+    }
   }
 
-  window.opener.postMessage(
-    {
-      type: 'NSA_PASSPORT_PHOTO',
-      dataUrl: selectedPhotoData
-    },
-    '*'
-  );
-
-  status('Photo sent to the registration page. You may close this tab.');
-});
-
-function status(message) {
-  $('status').textContent = message;
-}
-
-async function startCamera() {
-  stopCamera(false);
-
-  if (!navigator.mediaDevices?.getUserMedia) {
-    status('Live camera API unavailable. Check HTTPS and browser support.');
-    return;
-  }
-
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: facing } },
+  async function requestCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("Camera access requires HTTPS and a supported browser.");
+    }
+    return navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: facing },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
       audio: false
     });
-
-    $('video').srcObject = stream;
-    $('video').hidden = false;
-    await $('video').play();
-
-    $('capture').hidden = false;
-    $('stop').hidden = false;
-    $('switch').hidden = false;
-    status('SUCCESS: Live camera is working!');
-  } catch (e) {
-    status('Camera error: ' + e.name + ' — ' + e.message);
-  }
-}
-
-function stopCamera(showMessage = true) {
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  stream = null;
-  $('video').srcObject = null;
-  $('video').hidden = true;
-  $('capture').hidden = true;
-  $('stop').hidden = true;
-  $('switch').hidden = true;
-  if (showMessage) status('Camera stopped.');
-}
-
-function showPhoto(file) {
-  if (!file) return;
-
-  if (!file.type.startsWith('image/')) {
-    status('Please select an image.');
-    return;
   }
 
-  if (file.size > 10 * 1024 * 1024) {
-    status('Please select a photo smaller than 10 MB.');
-    return;
+  async function startPassportCamera() {
+    if (cameraBusy || stream) return;
+    cameraBusy = true;
+    try {
+      stream = await requestCamera();
+      $("video").srcObject = stream;
+      $("cameraStage").hidden = false;
+      await $("video").play();
+      setStatus("Camera ready. Tap Take New Photo to capture your photograph.");
+    } catch (error) {
+      console.warn("Passport camera startup:", error);
+      setStatus("Camera is not ready yet. Tap Take New Photo and allow camera access.");
+    } finally {
+      cameraBusy = false;
+    }
   }
 
-  const reader = new FileReader();
+  async function startCodeCamera() {
+    if (cameraBusy || stream) return;
+    cameraBusy = true;
+    $("startCodeScanner").disabled = true;
+    setStatus("Opening camera for code scanning...");
+    try {
+      stream = await requestCamera();
+      $("video").srcObject = stream;
+      $("cameraStage").hidden = false;
+      await $("video").play();
+      setStatus("Camera ready. Loading text recognition...");
+      await ensureOCRWorker();
+      if (!stream) return;
+      scanActive = true;
+      $("startCodeScanner").hidden = true;
+      setStatus("Scanning. Keep the six-character code inside the yellow frame.");
+      scheduleScan(250);
+    } catch (error) {
+      console.error("Code camera startup:", error);
+      stopCamera(false);
+      $("startCodeScanner").hidden = false;
+      $("startCodeScanner").disabled = false;
+      setStatus("Could not start the camera/scanner: " + (error.message || error.name || "Unknown error"));
+    } finally {
+      cameraBusy = false;
+      $("startCodeScanner").disabled = false;
+    }
+  }
 
-  reader.onload = function(e) {
-    selectedPhotoData = e.target.result;
+  function stopCamera(showMessage) {
+    scanActive = false;
+    if (scanTimer) {
+      clearTimeout(scanTimer);
+      scanTimer = null;
+    }
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      stream = null;
+    }
+    $("video").srcObject = null;
+    $("cameraStage").hidden = true;
+    if (showMessage) setStatus("Camera stopped.");
+  }
 
-    $('preview').src = selectedPhotoData;
-    $('preview').hidden = false;
-    $('retake').hidden = false;
-    $('usePhoto').hidden = false;
+  async function loadTesseract() {
+    if (window.Tesseract) return;
+    if (ocrScriptPromise) return ocrScriptPromise;
+    ocrScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      script.onload = resolve;
+      script.onerror = () => {
+        ocrScriptPromise = null;
+        reject(new Error("Could not load text recognition. Check the internet connection."));
+      };
+      document.head.appendChild(script);
+    });
+    return ocrScriptPromise;
+  }
 
-    status('Photo ready. Review it, retake it, or use this photo.');
-  };
+  async function ensureOCRWorker() {
+    if (ocrWorker) return ocrWorker;
+    if (ocrWorkerPromise) return ocrWorkerPromise;
+    ocrWorkerPromise = (async () => {
+      await loadTesseract();
+      const worker = await window.Tesseract.createWorker("eng", 1);
+      await worker.setParameters({
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        tessedit_pageseg_mode: "7"
+      });
+      ocrWorker = worker;
+      return worker;
+    })();
+    try {
+      return await ocrWorkerPromise;
+    } catch (error) {
+      ocrWorkerPromise = null;
+      throw error;
+    }
+  }
 
-  reader.onerror = function() {
-    status('Could not read this photo. Please try another image.');
-  };
+  function buildOCRCanvas() {
+    const video = $("video");
+    if (!video.videoWidth || !video.videoHeight) return null;
 
-  reader.readAsDataURL(file);
-}
+    const sourceWidth = video.videoWidth;
+    const sourceHeight = video.videoHeight;
+    const cropWidth = Math.floor(sourceWidth * 0.86);
+    const cropHeight = Math.floor(sourceHeight * 0.28);
+    const cropX = Math.floor((sourceWidth - cropWidth) / 2);
+    const cropY = Math.floor((sourceHeight - cropHeight) / 2);
+    const canvas = document.createElement("canvas");
+    canvas.width = cropWidth * 2;
+    canvas.height = cropHeight * 2;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.filter = "grayscale(1) contrast(1.5)";
+    context.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+    context.filter = "none";
+    return canvas;
+  }
 
-$('start').addEventListener('click', startCamera);
-  $('takeNewPhoto').addEventListener('click', () => {
-  $('preview').hidden = true;
-  $('retake').hidden = true;
-  startCamera();
-});
-$('stop').addEventListener('click', () => stopCamera());
-$('switch').addEventListener('click', async () => {
-  facing = facing === 'environment' ? 'user' : 'environment';
-  await startCamera();
-});
+  function findCaptureCode(text) {
+    const lines = String(text || "").toUpperCase().split(/\r?\n/);
+    for (const line of lines) {
+      const boundaryMatch = line.match(/(?:^|[^A-Z0-9])([A-Z0-9]{6})(?:$|[^A-Z0-9])/);
+      if (boundaryMatch) return boundaryMatch[1];
+      const compact = line.replace(/[^A-Z0-9]/g, "");
+      if (/^[A-Z0-9]{6}$/.test(compact)) return compact;
+    }
+    return "";
+  }
 
-$('capture').addEventListener('click', () => {
-  const v = $('video');
-  if (!v.videoWidth) return status('Wait for the video to load.');
+  function scheduleScan(delay) {
+    if (!scanActive) return;
+    scanTimer = setTimeout(scanFrame, delay || 800);
+  }
 
-  const c = $('canvas');
-  c.width = v.videoWidth;
-  c.height = v.videoHeight;
-  c.getContext('2d').drawImage(v, 0, 0);
-  c.toBlob(blob => {
-    if (!blob) return status('Could not capture photo.');
-    showPhoto(new File([blob], 'camera-photo.jpg',
-                       { type: 'image/jpeg' }));
+  async function scanFrame() {
+    if (!scanActive || readingFrame) return;
+    const canvas = buildOCRCanvas();
+    if (!canvas) {
+      scheduleScan(400);
+      return;
+    }
+    readingFrame = true;
+    try {
+      const result = await ocrWorker.recognize(canvas);
+      if (!scanActive) return;
+      const code = findCaptureCode(result && result.data ? result.data.text : "");
+      if (code) {
+        deliverCode(code);
+        return;
+      }
+      setStatus("Reading code... Keep all six characters inside the yellow frame and hold steady.");
+    } catch (error) {
+      console.error("OCR scan error:", error);
+      setStatus("Could not read the code clearly. Adjust focus and lighting.");
+    } finally {
+      readingFrame = false;
+      if (scanActive) scheduleScan(850);
+    }
+  }
+
+  function deliverCode(code) {
+    if (!/^[A-Z0-9]{6}$/.test(code)) return;
+    scanActive = false;
     stopCamera(false);
-    status('Photo captured! Review it or retake it.');
-  }, 'image/jpeg', 0.9);
-});
+    if (!window.opener || window.opener.closed) {
+      setStatus("Code detected: " + code + ". Reopen the scanner from the monthly evaluation page.");
+      return;
+    }
+    window.opener.postMessage({ type: "NSA_CAPTURE_CODE", code: code }, "*");
+    setStatus("Code " + code + " detected and sent to the monthly evaluation page. Return to that page to continue.");
+  }
 
-$('galleryFile').addEventListener('change', e =>
-  showPhoto(e.target.files[0]));
+  function capturePassportPhoto() {
+    const video = $("video");
+    if (!stream) {
+      startPassportCamera();
+      return;
+    }
+    if (!video.videoWidth) {
+      setStatus("Camera is still loading. Try again in a moment.");
+      return;
+    }
+    const canvas = $("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(blob => {
+      if (!blob) {
+        setStatus("Could not capture the photograph. Please try again.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = event => {
+        selectedPhotoData = event.target.result;
+        $("preview").src = selectedPhotoData;
+        $("preview").hidden = false;
+        stopCamera(false);
+        $("retakePhoto").hidden = false;
+        $("usePhoto").hidden = false;
+        setStatus("Photo captured. Choose Use This Photo or Retake Photo.");
+      };
+      reader.onerror = () => setStatus("Could not prepare the photograph. Please try again.");
+      reader.readAsDataURL(blob);
+    }, "image/jpeg", 0.9);
+  }
 
-$('retake').addEventListener('click', () => {
-  $('preview').hidden = true;
-  $('retake').hidden = true;
-  startCamera();
-});
+  function retakePassportPhoto() {
+    selectedPhotoData = null;
+    $("preview").hidden = true;
+    $("preview").removeAttribute("src");
+    $("retakePhoto").hidden = true;
+    $("usePhoto").hidden = true;
+    setStatus("Starting camera for a new photograph...");
+    startPassportCamera();
+  }
+
+  function sendPassportPhoto() {
+    if (!selectedPhotoData) {
+      setStatus("Take a photograph before selecting Use This Photo.");
+      return;
+    }
+    if (!window.opener || window.opener.closed) {
+      setStatus("Registration page not found. Reopen the camera from the registration form.");
+      return;
+    }
+    window.opener.postMessage({ type: "NSA_PASSPORT_PHOTO", dataUrl: selectedPhotoData }, "*");
+    setStatus("Photo sent to the registration page successfully. You may close this tab.");
+  }
+
+  $("takeNewPhoto").addEventListener("click", capturePassportPhoto);
+  $("retakePhoto").addEventListener("click", retakePassportPhoto);
+  $("usePhoto").addEventListener("click", sendPassportPhoto);
+  $("startCodeScanner").addEventListener("click", startCodeCamera);
+
+  window.addEventListener("beforeunload", () => {
+    stopCamera(false);
+    if (ocrWorker) {
+      ocrWorker.terminate().catch(() => {});
+    }
+  });
+
+  setupMode();
+})();
 </script>
 </body>
 </html>
