@@ -68,9 +68,9 @@
     .scan-frame {
       position: absolute;
       left: 5%;
-      top: 39%;
+      top: 35%;
       width: 90%;
-      height: 22%;
+      height: 30%;
       border: 3px solid #fcd116;
       border-radius: 9px;
       box-shadow: 0 0 0 1000px rgba(0,0,0,.16);
@@ -116,13 +116,13 @@
 
   <!-- OCR-only controls are visible only in capture-code mode. -->
   <div id="codeControls" hidden>
-    <button id="startCodeScanner" type="button">Start Code Scanner</button>
-    <button id="readCodeNow" type="button" hidden>Read Code Now</button>
+    <button id="startCodeScanner" type="button">START CODE SCANNER</button>
     <div id="detectedCodeBox" hidden>
-      <p><b>Detected code</b></p>
+      <p><b>Detected six-character code</b></p>
       <input id="detectedCode" type="text" maxlength="6" readonly aria-label="Detected six-character code">
-      <p class="subtle">If this scanner was not opened from the monthly evaluation page, copy this code and enter it there.</p>
-      <button id="copyDetectedCode" type="button">Copy Detected Code</button>
+      <button id="useDetectedCode" type="button" disabled>USE DETECTED CODE</button>
+      <button id="readCodeNow" type="button">READ CODE NOW</button>
+      <p class="subtle">Check the code above. If any character is incorrect, tap READ CODE NOW to scan again.</p>
     </div>
   </div>
 
@@ -147,8 +147,8 @@
   let ocrWorkerPromise = null;
   let ocrScriptPromise = null;
   let readingFrame = false;
-  let lastCandidate = "";
-  let candidateStreak = 0;
+  let thresholdIndex = 0;
+  let scanDeadline = 0;
   let codeWasDelivered = false;
 
   function setStatus(message) {
@@ -218,11 +218,11 @@
       setStatus("Camera is open. Loading text recognition; this may take a few seconds...");
       await ensureOCRWorker();
       if (!stream) return;
-      scanActive = true;
       $("startCodeScanner").hidden = true;
-      $("readCodeNow").hidden = false;
-      setStatus("Scanning the six text characters automatically. Keep them inside the yellow frame.");
-      scheduleScan(150);
+      $("detectedCodeBox").hidden = false;
+      $("detectedCode").value = "";
+      $("useDetectedCode").disabled = true;
+      beginTimedScan("Scanning the six text characters. Keep the code inside the yellow frame.");
     } catch (error) {
       console.error("Code camera startup:", error);
       stopCamera(false);
@@ -323,11 +323,11 @@
       visibleY = (sourceHeight - visibleHeight) / 2;
     }
 
-    // Keep the crop aligned with the visible yellow frame: x=5–95%, y=39–61%.
+    // Keep the crop aligned with the visible yellow frame: x=5–95%, y=35–65%.
     const cropX = Math.max(0, Math.floor(visibleX + visibleWidth * 0.05));
-    const cropY = Math.max(0, Math.floor(visibleY + visibleHeight * 0.39));
+    const cropY = Math.max(0, Math.floor(visibleY + visibleHeight * 0.35));
     const cropWidth = Math.min(sourceWidth - cropX, Math.floor(visibleWidth * 0.90));
-    const cropHeight = Math.min(sourceHeight - cropY, Math.floor(visibleHeight * 0.22));
+    const cropHeight = Math.min(sourceHeight - cropY, Math.floor(visibleHeight * 0.30));
     if (cropWidth < 20 || cropHeight < 10) return [];
 
     const enlarged = document.createElement("canvas");
@@ -404,67 +404,85 @@
   function scheduleScan(delay) {
     if (!scanActive) return;
     if (scanTimer) clearTimeout(scanTimer);
-    scanTimer = setTimeout(scanFrame, delay || 750);
+    scanTimer = setTimeout(scanFrame, delay == null ? 100 : delay);
+  }
+
+  function beginTimedScan(message) {
+    if (scanTimer) {
+      clearTimeout(scanTimer);
+      scanTimer = null;
+    }
+    scanActive = true;
+    scanDeadline = Date.now() + 3000;
+    thresholdIndex = 0;
+    $("detectedCodeBox").hidden = false;
+    $("detectedCode").value = "";
+    $("useDetectedCode").disabled = true;
+    setStatus(message);
+    scheduleScan(20);
   }
 
   async function scanFrame() {
     if (!scanActive || readingFrame) return;
 
+    if (Date.now() >= scanDeadline) {
+      scanActive = false;
+      scanTimer = null;
+      $("detectedCodeBox").hidden = false;
+      $("useDetectedCode").disabled = true;
+      setStatus("No code detected in this 3-second scan. Keep the code inside the yellow frame and tap READ CODE NOW to try again.");
+      return;
+    }
+
     const canvases = buildOCRCanvases();
     if (!canvases.length) {
-      scheduleScan(400);
+      scheduleScan(100);
       return;
     }
 
     readingFrame = true;
     try {
-      let code = "";
-      let lastText = "";
+      // Use one threshold per frame instead of running several slow OCR passes
+      // on every frame. A later manual scan starts the sequence again.
+      const canvas = canvases[thresholdIndex % canvases.length];
+      thresholdIndex += 1;
 
-      // Try several thresholds to cope with screen glare, brightness and colour cast.
-      for (let i = 0; i < canvases.length && !code && scanActive; i++) {
-        await ocrWorker.setParameters({ tessedit_pageseg_mode: "7" });
-        let result = await ocrWorker.recognize(canvases[i]);
-        lastText = result && result.data ? result.data.text : "";
-        code = findCaptureCode(lastText);
-
-        // PSM 8 treats the characters as one word; useful for a compact code.
-        if (!code && i === 1 && scanActive) {
-          await ocrWorker.setParameters({ tessedit_pageseg_mode: "8" });
-          result = await ocrWorker.recognize(canvases[i]);
-          lastText = result && result.data ? result.data.text : "";
-          code = findCaptureCode(lastText);
-          await ocrWorker.setParameters({ tessedit_pageseg_mode: "7" });
-        }
-      }
-
-      if (!scanActive) return;
+      await ocrWorker.setParameters({ tessedit_pageseg_mode: "7" });
+      const result = await ocrWorker.recognize(canvas);
+      const rawText = result && result.data ? result.data.text : "";
+      const code = findCaptureCode(rawText);
 
       if (code) {
-        if (code === lastCandidate) {
-          candidateStreak += 1;
-        } else {
-          lastCandidate = code;
-          candidateStreak = 1;
+        scanActive = false;
+        if (scanTimer) {
+          clearTimeout(scanTimer);
+          scanTimer = null;
         }
+        $("detectedCodeBox").hidden = false;
+        $("detectedCode").value = code;
+        $("useDetectedCode").disabled = false;
+        setStatus("Code detected: " + code + ". Check it, then tap USE DETECTED CODE. If it is incorrect, tap READ CODE NOW.");
+        return;
+      }
 
-        if (candidateStreak >= 2) {
-          deliverCode(code);
-          return;
-        }
-
-        setStatus("Possible code detected: " + code + ". Holding steady while I confirm it...");
+      if (Date.now() >= scanDeadline) {
+        scanActive = false;
+        $("detectedCodeBox").hidden = false;
+        $("useDetectedCode").disabled = true;
+        setStatus("No code detected in this 3-second scan. Keep the code inside the yellow frame and tap READ CODE NOW to try again.");
       } else {
-        lastCandidate = "";
-        candidateStreak = 0;
-        setStatus("Scanning the text in the yellow frame. Move closer so the six green characters fill more of the frame, reduce glare, and hold steady.");
+        setStatus("Reading the code… keep the six characters large, steady and inside the yellow frame.");
+        scheduleScan(80);
       }
     } catch (error) {
       console.error("OCR scan error:", error);
-      setStatus("Text recognition had a problem. Keep the code in focus, reduce glare, and try again.");
+      scanActive = false;
+      $("detectedCodeBox").hidden = false;
+      $("useDetectedCode").disabled = true;
+      setStatus("Text recognition encountered a problem. Tap READ CODE NOW to retry, or restart the scanner if the problem continues.");
     } finally {
       readingFrame = false;
-      if (scanActive) scheduleScan(500);
+      if (scanActive && !scanTimer) scheduleScan(80);
     }
   }
 
@@ -475,53 +493,45 @@
       return;
     }
     if (!ocrWorker) {
-      setStatus("Text recognition is still loading. Please wait.");
+      setStatus("Text recognition is still loading. Please wait, then tap READ CODE NOW again.");
       return;
     }
     if (readingFrame) {
-      setStatus("Already reading a frame. Hold the code steady for a moment.");
+      setStatus("The camera is reading a frame. Please wait a moment.");
       return;
     }
-    lastCandidate = "";
-    candidateStreak = 0;
-    setStatus("Reading the current camera frame...");
-    // The regular scan loop remains active; this schedules the next immediate read.
-    scheduleScan(30);
+    beginTimedScan("Reading the current camera view for up to 3 seconds…");
   }
 
-  function deliverCode(code) {
-    if (!/^[A-Z0-9]{6}$/.test(code) || codeWasDelivered) return;
-    codeWasDelivered = true;
-    scanActive = false;
-    stopCamera(false);
-
-    $("detectedCodeBox").hidden = false;
-    $("detectedCode").value = code;
-
-    if (!window.opener || window.opener.closed) {
-      setStatus("Code detected, but this page was not opened by the monthly evaluation form. Copy the code below and enter it manually.");
+  function sendDetectedCode() {
+    const code = String($("detectedCode").value || "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+      setStatus("No valid six-character code is ready. Tap READ CODE NOW to scan again.");
       return;
     }
+    if (codeWasDelivered) return;
+
+    const message = { type: "NSA_CAPTURE_CODE", code: code };
 
     try {
-      window.opener.postMessage({ type: "NSA_CAPTURE_CODE", code: code }, "*");
-      setStatus("Code " + code + " detected and sent. Return to the monthly evaluation page to confirm submission.");
+      // Monthly evaluation now embeds this scanner in an iframe, so parent
+      // messaging works even when mobile browsers remove window.opener.
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(message, "*");
+      } else if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(message, "*");
+      } else {
+        setStatus("This scanner is not connected to the monthly evaluation page. Close it and reopen SCAN CODE from the monthly evaluation form.");
+        return;
+      }
+
+      codeWasDelivered = true;
+      scanActive = false;
+      stopCamera(false);
+      setStatus("Code " + code + " sent to the monthly evaluation form. Return to that form to review and confirm submission.");
     } catch (error) {
       console.error("Could not send code to monthly form:", error);
-      setStatus("Code detected but could not be sent. Copy it below and enter it manually.");
-    }
-  }
-
-  async function copyDetectedCode() {
-    const code = $("detectedCode").value;
-    if (!code) return;
-    try {
-      await navigator.clipboard.writeText(code);
-      setStatus("Code copied. Return to the monthly evaluation page and paste it into the Office Capture Code field.");
-    } catch (error) {
-      $("detectedCode").focus();
-      $("detectedCode").select();
-      setStatus("Select the highlighted code and copy it, then paste it into the monthly evaluation page.");
+      setStatus("Could not send the code. Reopen the scanner using SCAN CODE on the monthly evaluation form and try again.");
     }
   }
 
@@ -597,7 +607,7 @@
   $("usePhoto").addEventListener("click", sendPassportPhoto);
   $("startCodeScanner").addEventListener("click", startCodeCamera);
   $("readCodeNow").addEventListener("click", readCodeNow);
-  $("copyDetectedCode").addEventListener("click", copyDetectedCode);
+  $("useDetectedCode").addEventListener("click", sendDetectedCode);
 
   window.addEventListener("beforeunload", () => {
     stopCamera(false);
