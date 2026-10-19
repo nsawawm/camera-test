@@ -3,14 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#006b3f">
   <title>NSA Camera</title>
   <style>
     * { box-sizing: border-box; }
     body {
       font-family: Arial, sans-serif;
-      max-width: 600px;
-      margin: 20px auto;
-      padding: 14px;
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 12px;
       background: #f3f5f7;
       color: #17202a;
     }
@@ -25,7 +26,6 @@
     button {
       display: block;
       width: 100%;
-      box-sizing: border-box;
       padding: 14px;
       margin: 12px 0;
       border: 0;
@@ -38,6 +38,16 @@
       cursor: pointer;
     }
     button:disabled { opacity: .6; cursor: not-allowed; }
+    input {
+      width: 100%;
+      padding: 13px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-size: 20px;
+      letter-spacing: 3px;
+      text-align: center;
+      text-transform: uppercase;
+    }
     video, img {
       display: block;
       width: 100%;
@@ -57,13 +67,13 @@
     .camera-stage { position: relative; }
     .scan-frame {
       position: absolute;
-      left: 7%;
-      top: 37%;
-      width: 86%;
-      height: 26%;
+      left: 5%;
+      top: 34%;
+      width: 90%;
+      height: 32%;
       border: 3px solid #fcd116;
       border-radius: 9px;
-      box-shadow: 0 0 0 1000px rgba(0,0,0,.13);
+      box-shadow: 0 0 0 1000px rgba(0,0,0,.16);
       pointer-events: none;
     }
     .hint {
@@ -72,6 +82,7 @@
       border-radius: 8px;
       font-size: 14px;
     }
+    .subtle { color: #475569; font-size: 13px; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -85,7 +96,7 @@
   </div>
 
   <div id="codeInstructions" class="hint" hidden>
-    Hold the complete six-character Office Capture Code inside the yellow frame. Keep the code in focus and hold the camera steady. The scanner will return the detected code to the monthly evaluation page.
+    Hold the complete six-character Office Capture Code inside the yellow frame. Keep the code large, sharply focused and steady. The scanner will read it and send it to the monthly evaluation page.
   </div>
 
   <div id="cameraStage" class="camera-stage" hidden>
@@ -96,15 +107,24 @@
   <canvas id="canvas" hidden></canvas>
   <img id="preview" alt="Photograph preview" hidden>
 
-  <!-- Passport mode has only these three action buttons. -->
+  <!-- Passport mode has exactly three photo-action buttons. -->
   <div id="passportButtons">
     <button id="takeNewPhoto" type="button">Take New Photo</button>
     <button id="retakePhoto" type="button" hidden>Retake Photo</button>
     <button id="usePhoto" type="button" hidden>Use This Photo</button>
   </div>
 
-  <!-- Code mode starts the camera automatically; this button is only a fallback. -->
-  <button id="startCodeScanner" type="button" hidden>Start Code Scanner</button>
+  <!-- OCR-only controls are visible only in capture-code mode. -->
+  <div id="codeControls" hidden>
+    <button id="startCodeScanner" type="button">Start Code Scanner</button>
+    <button id="readCodeNow" type="button" hidden>Read Code Now</button>
+    <div id="detectedCodeBox" hidden>
+      <p><b>Detected code</b></p>
+      <input id="detectedCode" type="text" maxlength="6" readonly aria-label="Detected six-character code">
+      <p class="subtle">If this scanner was not opened from the monthly evaluation page, copy this code and enter it there.</p>
+      <button id="copyDetectedCode" type="button">Copy Detected Code</button>
+    </div>
+  </div>
 
   <p id="status" role="status" aria-live="polite">Preparing camera...</p>
 </main>
@@ -127,6 +147,9 @@
   let ocrWorkerPromise = null;
   let ocrScriptPromise = null;
   let readingFrame = false;
+  let lastCandidate = "";
+  let candidateStreak = 0;
+  let codeWasDelivered = false;
 
   function setStatus(message) {
     $("status").textContent = message;
@@ -140,16 +163,13 @@
       $("passportInstructions").hidden = true;
       $("passportButtons").hidden = true;
       $("codeInstructions").hidden = false;
+      $("codeControls").hidden = false;
       $("scanFrame").hidden = false;
-      $("startCodeScanner").hidden = false;
-      $("startCodeScanner").textContent = "Start Code Scanner";
-      setStatus("Requesting camera access...");
-      startCodeCamera();
+      setStatus("Tap Start Code Scanner and allow camera access.");
     } else {
       $("startCodeScanner").hidden = true;
+      $("readCodeNow").hidden = true;
       setStatus("Starting camera for passport photography...");
-      // Try opening the camera on load. If permission requires a user action,
-      // the Take New Photo button will start it instead.
       startPassportCamera();
     }
   }
@@ -179,7 +199,7 @@
       setStatus("Camera ready. Tap Take New Photo to capture your photograph.");
     } catch (error) {
       console.warn("Passport camera startup:", error);
-      setStatus("Camera is not ready yet. Tap Take New Photo and allow camera access.");
+      setStatus("Camera did not open automatically. Tap Take New Photo and allow camera access.");
     } finally {
       cameraBusy = false;
     }
@@ -189,25 +209,27 @@
     if (cameraBusy || stream) return;
     cameraBusy = true;
     $("startCodeScanner").disabled = true;
-    setStatus("Opening camera for code scanning...");
+    setStatus("Opening camera...");
     try {
       stream = await requestCamera();
       $("video").srcObject = stream;
       $("cameraStage").hidden = false;
       await $("video").play();
-      setStatus("Camera ready. Loading text recognition...");
+      setStatus("Camera is open. Loading text recognition; this may take a few seconds...");
       await ensureOCRWorker();
       if (!stream) return;
       scanActive = true;
       $("startCodeScanner").hidden = true;
-      setStatus("Scanning. Keep the six-character code inside the yellow frame.");
-      scheduleScan(250);
+      $("readCodeNow").hidden = false;
+      setStatus("Scanning automatically. Keep all six characters inside the yellow frame.");
+      scheduleScan(150);
     } catch (error) {
       console.error("Code camera startup:", error);
       stopCamera(false);
+      $("cameraStage").hidden = true;
       $("startCodeScanner").hidden = false;
       $("startCodeScanner").disabled = false;
-      setStatus("Could not start the camera/scanner: " + (error.message || error.name || "Unknown error"));
+      setStatus("Could not start the camera/scanner: " + (error.message || error.name || "Unknown error") + ". Check camera permission and internet access, then retry.");
     } finally {
       cameraBusy = false;
       $("startCodeScanner").disabled = false;
@@ -234,11 +256,11 @@
     if (ocrScriptPromise) return ocrScriptPromise;
     ocrScriptPromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
       script.onload = resolve;
       script.onerror = () => {
         ocrScriptPromise = null;
-        reject(new Error("Could not load text recognition. Check the internet connection."));
+        reject(new Error("Could not load text recognition from the CDN. Check the internet connection."));
       };
       document.head.appendChild(script);
     });
@@ -270,27 +292,53 @@
     const video = $("video");
     if (!video.videoWidth || !video.videoHeight) return null;
 
+    // This crop is aligned with the yellow on-screen frame.
     const sourceWidth = video.videoWidth;
     const sourceHeight = video.videoHeight;
-    const cropWidth = Math.floor(sourceWidth * 0.86);
-    const cropHeight = Math.floor(sourceHeight * 0.28);
+    const cropWidth = Math.floor(sourceWidth * 0.90);
+    const cropHeight = Math.floor(sourceHeight * 0.32);
     const cropX = Math.floor((sourceWidth - cropWidth) / 2);
     const cropY = Math.floor((sourceHeight - cropHeight) / 2);
     const canvas = document.createElement("canvas");
-    canvas.width = cropWidth * 2;
-    canvas.height = cropHeight * 2;
+    canvas.width = cropWidth * 3;
+    canvas.height = cropHeight * 3;
     const context = canvas.getContext("2d", { willReadFrequently: true });
-    context.filter = "grayscale(1) contrast(1.5)";
-    context.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+    context.filter = "grayscale(1) contrast(1.7)";
+    context.drawImage(
+      video, cropX, cropY, cropWidth, cropHeight,
+      0, 0, canvas.width, canvas.height
+    );
     context.filter = "none";
     return canvas;
   }
 
   function findCaptureCode(text) {
     const lines = String(text || "").toUpperCase().split(/\r?\n/);
-    for (const line of lines) {
-      const boundaryMatch = line.match(/(?:^|[^A-Z0-9])([A-Z0-9]{6})(?:$|[^A-Z0-9])/);
-      if (boundaryMatch) return boundaryMatch[1];
+
+    for (const originalLine of lines) {
+      const line = originalLine.trim();
+
+      // Prefer a standalone six-character token.
+      const tokenMatches = line.match(/(?:^|[^A-Z0-9])([A-Z0-9]{6})(?=$|[^A-Z0-9])/g);
+      if (tokenMatches) {
+        for (const token of tokenMatches) {
+          const candidate = token.replace(/[^A-Z0-9]/g, "");
+          if (/^[A-Z0-9]{6}$/.test(candidate)) return candidate;
+        }
+      }
+
+      // Also accept a code OCR separated with spaces or hyphens:
+      // e.g. "A B C 1 2 3" or "ABC-123".
+      const spacedMatches = line.match(/(?:^|[^A-Z0-9])([A-Z0-9](?:[ \t-]*[A-Z0-9]){5})(?=$|[^A-Z0-9])/g);
+      if (spacedMatches) {
+        for (const token of spacedMatches) {
+          const candidate = token.replace(/[^A-Z0-9]/g, "");
+          if (/^[A-Z0-9]{6}$/.test(candidate)) return candidate;
+        }
+      }
+
+      // Accept the entire line when it contains only the six code characters
+      // plus OCR whitespace/punctuation, but not surrounding label text.
       const compact = line.replace(/[^A-Z0-9]/g, "");
       if (/^[A-Z0-9]{6}$/.test(compact)) return compact;
     }
@@ -299,7 +347,8 @@
 
   function scheduleScan(delay) {
     if (!scanActive) return;
-    scanTimer = setTimeout(scanFrame, delay || 800);
+    if (scanTimer) clearTimeout(scanTimer);
+    scanTimer = setTimeout(scanFrame, delay || 750);
   }
 
   async function scanFrame() {
@@ -309,47 +358,111 @@
       scheduleScan(400);
       return;
     }
+
     readingFrame = true;
     try {
       const result = await ocrWorker.recognize(canvas);
       if (!scanActive) return;
-      const code = findCaptureCode(result && result.data ? result.data.text : "");
+
+      const text = result && result.data ? result.data.text : "";
+      const code = findCaptureCode(text);
+
       if (code) {
-        deliverCode(code);
-        return;
+        if (code === lastCandidate) {
+          candidateStreak += 1;
+        } else {
+          lastCandidate = code;
+          candidateStreak = 1;
+        }
+
+        if (candidateStreak >= 2) {
+          deliverCode(code);
+          return;
+        }
+        setStatus("Possible code detected: " + code + ". Confirming recognition...");
+      } else {
+        lastCandidate = "";
+        candidateStreak = 0;
+        setStatus("Scanning automatically. Centre the code in the yellow frame and hold steady.");
       }
-      setStatus("Reading code... Keep all six characters inside the yellow frame and hold steady.");
     } catch (error) {
       console.error("OCR scan error:", error);
-      setStatus("Could not read the code clearly. Adjust focus and lighting.");
+      setStatus("Could not read the code clearly. Improve focus/lighting and keep the full code inside the yellow frame.");
     } finally {
       readingFrame = false;
-      if (scanActive) scheduleScan(850);
+      if (scanActive) scheduleScan(650);
     }
   }
 
-  function deliverCode(code) {
-    if (!/^[A-Z0-9]{6}$/.test(code)) return;
-    scanActive = false;
-    stopCamera(false);
-    if (!window.opener || window.opener.closed) {
-      setStatus("Code detected: " + code + ". Reopen the scanner from the monthly evaluation page.");
+  async function readCodeNow() {
+    if (!codeMode) return;
+    if (!stream) {
+      await startCodeCamera();
       return;
     }
-    window.opener.postMessage({ type: "NSA_CAPTURE_CODE", code: code }, "*");
-    setStatus("Code " + code + " detected and sent to the monthly evaluation page. Return to that page to continue.");
+    if (!ocrWorker) {
+      setStatus("Text recognition is still loading. Please wait.");
+      return;
+    }
+    if (readingFrame) {
+      setStatus("Already reading a frame. Hold the code steady for a moment.");
+      return;
+    }
+    lastCandidate = "";
+    candidateStreak = 0;
+    setStatus("Reading the current camera frame...");
+    // The regular scan loop remains active; this schedules the next immediate read.
+    scheduleScan(30);
+  }
+
+  function deliverCode(code) {
+    if (!/^[A-Z0-9]{6}$/.test(code) || codeWasDelivered) return;
+    codeWasDelivered = true;
+    scanActive = false;
+    stopCamera(false);
+
+    $("detectedCodeBox").hidden = false;
+    $("detectedCode").value = code;
+
+    if (!window.opener || window.opener.closed) {
+      setStatus("Code detected, but this page was not opened by the monthly evaluation form. Copy the code below and enter it manually.");
+      return;
+    }
+
+    try {
+      window.opener.postMessage({ type: "NSA_CAPTURE_CODE", code: code }, "*");
+      setStatus("Code " + code + " detected and sent. Return to the monthly evaluation page to confirm submission.");
+    } catch (error) {
+      console.error("Could not send code to monthly form:", error);
+      setStatus("Code detected but could not be sent. Copy it below and enter it manually.");
+    }
+  }
+
+  async function copyDetectedCode() {
+    const code = $("detectedCode").value;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      setStatus("Code copied. Return to the monthly evaluation page and paste it into the Office Capture Code field.");
+    } catch (error) {
+      $("detectedCode").focus();
+      $("detectedCode").select();
+      setStatus("Select the highlighted code and copy it, then paste it into the monthly evaluation page.");
+    }
   }
 
   function capturePassportPhoto() {
     const video = $("video");
     if (!stream) {
       startPassportCamera();
+      setStatus("Opening camera. When it is ready, tap Take New Photo again.");
       return;
     }
     if (!video.videoWidth) {
       setStatus("Camera is still loading. Try again in a moment.");
       return;
     }
+
     const canvas = $("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -390,17 +503,27 @@
       return;
     }
     if (!window.opener || window.opener.closed) {
-      setStatus("Registration page not found. Reopen the camera from the registration form.");
+      setStatus("Registration page not found. Reopen this camera from the registration form.");
       return;
     }
-    window.opener.postMessage({ type: "NSA_PASSPORT_PHOTO", dataUrl: selectedPhotoData }, "*");
-    setStatus("Photo sent to the registration page successfully. You may close this tab.");
+    try {
+      window.opener.postMessage(
+        { type: "NSA_PASSPORT_PHOTO", dataUrl: selectedPhotoData },
+        "*"
+      );
+      setStatus("Photo sent to the registration page successfully. You may return to the registration form.");
+    } catch (error) {
+      console.error("Could not send passport photo:", error);
+      setStatus("Could not send the photograph. Return to the registration page and reopen the camera.");
+    }
   }
 
   $("takeNewPhoto").addEventListener("click", capturePassportPhoto);
   $("retakePhoto").addEventListener("click", retakePassportPhoto);
   $("usePhoto").addEventListener("click", sendPassportPhoto);
   $("startCodeScanner").addEventListener("click", startCodeCamera);
+  $("readCodeNow").addEventListener("click", readCodeNow);
+  $("copyDetectedCode").addEventListener("click", copyDetectedCode);
 
   window.addEventListener("beforeunload", () => {
     stopCamera(false);
