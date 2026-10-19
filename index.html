@@ -511,27 +511,52 @@
     }
     if (codeWasDelivered) return;
 
-    const message = { type: "NSA_CAPTURE_CODE", code: code };
+    // Preferred flow: this scanner is a top-level GitHub Pages page. Return to
+    // the exact Apps Script evaluation route with the code in a query parameter.
+    const query = new URLSearchParams(window.location.search);
+    const returnUrlValue = query.get("returnUrl");
 
-    try {
-      // Monthly evaluation now embeds this scanner in an iframe, so parent
-      // messaging works even when mobile browsers remove window.opener.
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage(message, "*");
-      } else if (window.opener && !window.opener.closed) {
-        window.opener.postMessage(message, "*");
-      } else {
-        setStatus("This scanner is not connected to the monthly evaluation page. Close it and reopen SCAN CODE from the monthly evaluation form.");
+    if (returnUrlValue) {
+      try {
+        const returnUrl = new URL(returnUrlValue);
+        if (returnUrl.protocol !== "https:" ||
+            returnUrl.hostname !== "script.google.com") {
+          setStatus("The return address is not a recognised NSA WAWM Apps Script address. Reopen SCAN CODE from the monthly evaluation page.");
+          return;
+        }
+
+        returnUrl.searchParams.set("captureCode", code);
+        returnUrl.searchParams.set("captureCodeSource", "ocr");
+        codeWasDelivered = true;
+        scanActive = false;
+        stopCamera(false);
+        setStatus("Code detected. Returning to the monthly evaluation form…");
+        window.location.replace(returnUrl.toString());
+        return;
+      } catch (error) {
+        console.error("Invalid scanner return URL:", error);
+        setStatus("Could not return to the evaluation form. Close the scanner and reopen SCAN CODE from the monthly evaluation page.");
         return;
       }
+    }
 
-      codeWasDelivered = true;
-      scanActive = false;
-      stopCamera(false);
-      setStatus("Code " + code + " sent to the monthly evaluation form. Return to that form to review and confirm submission.");
+    // Fallback for any existing opener/embedded use.
+    const message = { type: "NSA_CAPTURE_CODE", code: code };
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(message, "*");
+        codeWasDelivered = true;
+        setStatus("Code sent. Return to the monthly evaluation form.");
+      } else if (window.parent && window.parent !== window) {
+        window.parent.postMessage(message, "*");
+        codeWasDelivered = true;
+        setStatus("Code sent. Return to the monthly evaluation form.");
+      } else {
+        setStatus("No return address was provided. Close this page and reopen SCAN CODE from the monthly evaluation form.");
+      }
     } catch (error) {
-      console.error("Could not send code to monthly form:", error);
-      setStatus("Could not send the code. Reopen the scanner using SCAN CODE on the monthly evaluation form and try again.");
+      console.error("Could not send code:", error);
+      setStatus("Could not send the code. Reopen SCAN CODE from the monthly evaluation form and try again.");
     }
   }
 
