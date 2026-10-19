@@ -55,7 +55,7 @@
       background: #111;
       border-radius: 9px;
     }
-    video { aspect-ratio: 4 / 3; object-fit: cover; }
+    video { aspect-ratio: 16 / 9; object-fit: cover; margin-top: 0; }
     #preview { background: #eee; }
     #status {
       padding: 12px;
@@ -68,9 +68,9 @@
     .scan-frame {
       position: absolute;
       left: 5%;
-      top: 34%;
+      top: 39%;
       width: 90%;
-      height: 32%;
+      height: 22%;
       border: 3px solid #fcd116;
       border-radius: 9px;
       box-shadow: 0 0 0 1000px rgba(0,0,0,.16);
@@ -96,7 +96,7 @@
   </div>
 
   <div id="codeInstructions" class="hint" hidden>
-    Hold the complete six-character Office Capture Code inside the yellow frame. Keep the code large, sharply focused and steady. The scanner will read it and send it to the monthly evaluation page.
+    This reads the six green letters/numbers as TEXT, not a QR code. Position only the large code characters inside the yellow frame. Move closer, avoid reflections, tap the screen to focus if your camera allows it, and hold still while scanning.
   </div>
 
   <div id="cameraStage" class="camera-stage" hidden>
@@ -181,8 +181,8 @@
     return navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: facing },
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
       },
       audio: false
     });
@@ -221,7 +221,7 @@
       scanActive = true;
       $("startCodeScanner").hidden = true;
       $("readCodeNow").hidden = false;
-      setStatus("Scanning automatically. Keep all six characters inside the yellow frame.");
+      setStatus("Scanning the six text characters automatically. Keep them inside the yellow frame.");
       scheduleScan(150);
     } catch (error) {
       console.error("Code camera startup:", error);
@@ -270,16 +270,20 @@
   async function ensureOCRWorker() {
     if (ocrWorker) return ocrWorker;
     if (ocrWorkerPromise) return ocrWorkerPromise;
+
     ocrWorkerPromise = (async () => {
       await loadTesseract();
       const worker = await window.Tesseract.createWorker("eng", 1);
       await worker.setParameters({
         tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-        tessedit_pageseg_mode: "7"
+        tessedit_pageseg_mode: "7",
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300"
       });
       ocrWorker = worker;
       return worker;
     })();
+
     try {
       return await ocrWorkerPromise;
     } catch (error) {
@@ -288,28 +292,80 @@
     }
   }
 
-  function buildOCRCanvas() {
+  /*
+   * Crop the same central strip shown by the yellow guide.
+   * Account for object-fit:cover so the source crop matches what the user sees.
+   * Generate multiple high-contrast versions because green text on a pale screen
+   * is often clearer in the camera's red channel than in ordinary grayscale.
+   */
+  function buildOCRCanvases() {
     const video = $("video");
-    if (!video.videoWidth || !video.videoHeight) return null;
+    if (!video.videoWidth || !video.videoHeight) return [];
 
-    // This crop is aligned with the yellow on-screen frame.
     const sourceWidth = video.videoWidth;
     const sourceHeight = video.videoHeight;
-    const cropWidth = Math.floor(sourceWidth * 0.90);
-    const cropHeight = Math.floor(sourceHeight * 0.32);
-    const cropX = Math.floor((sourceWidth - cropWidth) / 2);
-    const cropY = Math.floor((sourceHeight - cropHeight) / 2);
-    const canvas = document.createElement("canvas");
-    canvas.width = cropWidth * 3;
-    canvas.height = cropHeight * 3;
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    context.filter = "grayscale(1) contrast(1.7)";
-    context.drawImage(
-      video, cropX, cropY, cropWidth, cropHeight,
-      0, 0, canvas.width, canvas.height
-    );
-    context.filter = "none";
-    return canvas;
+    const rect = video.getBoundingClientRect();
+    const boxWidth = rect.width || video.clientWidth;
+    const boxHeight = rect.height || video.clientHeight;
+    if (!boxWidth || !boxHeight) return [];
+
+    const sourceAspect = sourceWidth / sourceHeight;
+    const boxAspect = boxWidth / boxHeight;
+
+    let visibleX = 0, visibleY = 0;
+    let visibleWidth = sourceWidth, visibleHeight = sourceHeight;
+
+    if (sourceAspect > boxAspect) {
+      visibleWidth = sourceHeight * boxAspect;
+      visibleX = (sourceWidth - visibleWidth) / 2;
+    } else {
+      visibleHeight = sourceWidth / boxAspect;
+      visibleY = (sourceHeight - visibleHeight) / 2;
+    }
+
+    // Keep the crop aligned with the visible yellow frame: x=5–95%, y=39–61%.
+    const cropX = Math.max(0, Math.floor(visibleX + visibleWidth * 0.05));
+    const cropY = Math.max(0, Math.floor(visibleY + visibleHeight * 0.39));
+    const cropWidth = Math.min(sourceWidth - cropX, Math.floor(visibleWidth * 0.90));
+    const cropHeight = Math.min(sourceHeight - cropY, Math.floor(visibleHeight * 0.22));
+    if (cropWidth < 20 || cropHeight < 10) return [];
+
+    const enlarged = document.createElement("canvas");
+    enlarged.width = cropWidth * 4;
+    enlarged.height = cropHeight * 4;
+    const ectx = enlarged.getContext("2d", { willReadFrequently: true });
+    ectx.imageSmoothingEnabled = true;
+    ectx.imageSmoothingQuality = "high";
+    ectx.drawImage(video, cropX, cropY, cropWidth, cropHeight,
+                   0, 0, enlarged.width, enlarged.height);
+
+    const original = ectx.getImageData(0, 0, enlarged.width, enlarged.height);
+    const variants = [];
+
+    // Threshold the red channel: the green code characters become dark,
+    // while the pale green/white display background becomes white.
+    [85, 115, 145, 175].forEach(threshold => {
+      const canvas = document.createElement("canvas");
+      canvas.width = enlarged.width;
+      canvas.height = enlarged.height;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const out = ctx.createImageData(enlarged.width, enlarged.height);
+      const srcData = original.data;
+      const dstData = out.data;
+
+      for (let i = 0; i < srcData.length; i += 4) {
+        // Red-channel threshold is particularly useful for green lettering.
+        const value = srcData[i] < threshold ? 0 : 255;
+        dstData[i] = value;
+        dstData[i + 1] = value;
+        dstData[i + 2] = value;
+        dstData[i + 3] = 255;
+      }
+      ctx.putImageData(out, 0, 0);
+      variants.push(canvas);
+    });
+
+    return variants;
   }
 
   function findCaptureCode(text) {
@@ -353,19 +409,36 @@
 
   async function scanFrame() {
     if (!scanActive || readingFrame) return;
-    const canvas = buildOCRCanvas();
-    if (!canvas) {
+
+    const canvases = buildOCRCanvases();
+    if (!canvases.length) {
       scheduleScan(400);
       return;
     }
 
     readingFrame = true;
     try {
-      const result = await ocrWorker.recognize(canvas);
-      if (!scanActive) return;
+      let code = "";
+      let lastText = "";
 
-      const text = result && result.data ? result.data.text : "";
-      const code = findCaptureCode(text);
+      // Try several thresholds to cope with screen glare, brightness and colour cast.
+      for (let i = 0; i < canvases.length && !code && scanActive; i++) {
+        await ocrWorker.setParameters({ tessedit_pageseg_mode: "7" });
+        let result = await ocrWorker.recognize(canvases[i]);
+        lastText = result && result.data ? result.data.text : "";
+        code = findCaptureCode(lastText);
+
+        // PSM 8 treats the characters as one word; useful for a compact code.
+        if (!code && i === 1 && scanActive) {
+          await ocrWorker.setParameters({ tessedit_pageseg_mode: "8" });
+          result = await ocrWorker.recognize(canvases[i]);
+          lastText = result && result.data ? result.data.text : "";
+          code = findCaptureCode(lastText);
+          await ocrWorker.setParameters({ tessedit_pageseg_mode: "7" });
+        }
+      }
+
+      if (!scanActive) return;
 
       if (code) {
         if (code === lastCandidate) {
@@ -379,18 +452,19 @@
           deliverCode(code);
           return;
         }
-        setStatus("Possible code detected: " + code + ". Confirming recognition...");
+
+        setStatus("Possible code detected: " + code + ". Holding steady while I confirm it...");
       } else {
         lastCandidate = "";
         candidateStreak = 0;
-        setStatus("Scanning automatically. Centre the code in the yellow frame and hold steady.");
+        setStatus("Scanning the text in the yellow frame. Move closer so the six green characters fill more of the frame, reduce glare, and hold steady.");
       }
     } catch (error) {
       console.error("OCR scan error:", error);
-      setStatus("Could not read the code clearly. Improve focus/lighting and keep the full code inside the yellow frame.");
+      setStatus("Text recognition had a problem. Keep the code in focus, reduce glare, and try again.");
     } finally {
       readingFrame = false;
-      if (scanActive) scheduleScan(650);
+      if (scanActive) scheduleScan(500);
     }
   }
 
