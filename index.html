@@ -57,6 +57,20 @@
     }
     video { aspect-ratio: 16 / 9; object-fit: cover; margin-top: 0; }
     #preview { background: #eee; }
+    #qrReader { width: 100%; margin: 12px 0; }
+    #qrReader video { width: 100% !important; margin: 0 !important; object-fit: cover; border-radius: 9px; }
+    body.passport-mode #cameraStage { width: min(100%, 360px); margin: 12px auto; }
+    body.passport-mode #video { aspect-ratio: 7 / 9; object-fit: cover; }
+    body.passport-mode #preview { width: min(100%, 360px); aspect-ratio: 7 / 9; object-fit: cover; margin: 12px auto; }
+    body.code-mode #video { aspect-ratio: 16 / 9; object-fit: cover; }
+    .passport-frame {
+      position: absolute;
+      inset: 5%;
+      border: 3px solid #fcd116;
+      border-radius: 8px;
+      box-shadow: 0 0 0 1000px rgba(0,0,0,.20);
+      pointer-events: none;
+    }
     #status {
       padding: 12px;
       background: #eef2f6;
@@ -102,7 +116,10 @@
   <div id="cameraStage" class="camera-stage" hidden>
     <video id="video" autoplay playsinline muted></video>
     <div id="scanFrame" class="scan-frame" hidden></div>
+    <div id="passportFrame" class="passport-frame" hidden></div>
   </div>
+  <div id="qrReader" hidden></div>
+  <button id="torchToggle" type="button" hidden aria-pressed="false">TURN FLASHLIGHT ON</button>
 
   <canvas id="canvas" hidden></canvas>
   <img id="preview" alt="Photograph preview" hidden>
@@ -116,19 +133,19 @@
 
   <!-- OCR-only controls are visible only in capture-code mode. -->
   <div id="codeControls" hidden>
-    <button id="startCodeScanner" type="button">START CODE SCANNER</button>
     <div id="detectedCodeBox" hidden>
       <p><b>Detected six-character code</b></p>
-      <input id="detectedCode" type="text" maxlength="6" readonly aria-label="Detected six-character code">
-      <button id="useDetectedCode" type="button" disabled>USE DETECTED CODE</button>
-      <button id="readCodeNow" type="button">READ CODE NOW</button>
-      <p class="subtle">Check the code above. If any character is incorrect, tap READ CODE NOW to scan again.</p>
+      <input id="detectedCode" type="text" maxlength="6" autocomplete="off" spellcheck="false" aria-label="Editable six-character capture code">
+      <button id="useDetectedCode" type="button" disabled>USE THIS CODE</button>
+      <button id="readCodeNow" type="button">READ CODE AGAIN</button>
+      <p class="subtle">Check the code above. You can correct any character before selecting USE THIS CODE. If the scan is wrong, select READ CODE AGAIN.</p>
     </div>
   </div>
 
   <p id="status" role="status" aria-live="polite">Preparing camera...</p>
 </main>
 
+<script src="https://unpkg.com/html5-qrcode"></script>
 <script>
 (function () {
   "use strict";
@@ -136,8 +153,12 @@
   const $ = id => document.getElementById(id);
   const params = new URLSearchParams(window.location.search);
   const codeMode = params.get("mode") === "capture-code";
+  const qrMode = params.get("mode") === "qr-scan" || params.get("mode") === "qr";
 
   let stream = null;
+  let qrScanner = null;
+  let qrScanLocked = false;
+  let torchOn = false;
   let facing = "environment";
   let selectedPhotoData = null;
   let cameraBusy = false;
@@ -156,21 +177,132 @@
   }
 
   function setupMode() {
+    if (qrMode) {
+      document.body.classList.add("qr-mode");
+      document.title = "NSA QR Scanner";
+      $("heading").textContent = "NSA QR Scanner";
+      $("description").textContent = "Point the camera at an NSA registration or evaluation QR code. Scanning starts automatically.";
+      $("passportInstructions").hidden = true;
+      $("passportButtons").hidden = true;
+      $("codeInstructions").hidden = true;
+      $("codeControls").hidden = true;
+      $("cameraStage").hidden = true;
+      $("qrReader").hidden = false;
+      setStatus("Opening QR scanner...");
+      startQRScanner();
+      return;
+    }
+
     if (codeMode) {
+      document.body.classList.add("code-mode");
       document.title = "NSA Office Capture Code Scanner";
       $("heading").textContent = "Office Capture Code Scanner";
-      $("description").textContent = "Automatically read the six-character code for monthly evaluation.";
+      $("description").textContent = "The camera and text recognition start automatically. Position the six-character code inside the yellow frame.";
       $("passportInstructions").hidden = true;
       $("passportButtons").hidden = true;
       $("codeInstructions").hidden = false;
       $("codeControls").hidden = false;
       $("scanFrame").hidden = false;
-      setStatus("Tap Start Code Scanner and allow camera access.");
-    } else {
-      $("startCodeScanner").hidden = true;
-      $("readCodeNow").hidden = true;
-      setStatus("Starting camera for passport photography...");
-      startPassportCamera();
+      $("passportFrame").hidden = true;
+      setStatus("Starting camera and text recognition...");
+      startCodeCamera();
+      return;
+    }
+
+    document.body.classList.add("passport-mode");
+    $("codeInstructions").hidden = true;
+    $("codeControls").hidden = true;
+    $("scanFrame").hidden = true;
+    $("passportFrame").hidden = false;
+    setStatus("Starting camera for passport photography...");
+    startPassportCamera();
+  }
+
+  async function startQRScanner() {
+    if (!window.Html5Qrcode) {
+      setStatus("The QR scanner library could not load. Check the internet connection and reopen the scanner.");
+      return;
+    }
+    if (qrScanner) return;
+    qrScanLocked = false;
+    try {
+      qrScanner = new Html5Qrcode("qrReader", { verbose: false });
+      await qrScanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0, rememberLastUsedCamera: true },
+        handleQRDetected,
+        function () { /* Normal no-QR-found frames are ignored. */ }
+      );
+      $("torchToggle").hidden = false;
+      $("torchToggle").textContent = "TURN FLASHLIGHT ON";
+      $("torchToggle").setAttribute("aria-pressed", "false");
+      setStatus("Camera active. Point it at the QR code; this page will return automatically when a code is found.");
+    } catch (error) {
+      console.error("QR scanner startup:", error);
+      qrScanner = null;
+      $("torchToggle").hidden = true;
+      setStatus("Could not start the QR camera: " + (error.message || error.name || "Unknown error") + ". Check camera permission and open this page over HTTPS.");
+    }
+  }
+
+  async function handleQRDetected(decodedText) {
+    if (qrScanLocked) return;
+    qrScanLocked = true;
+    const value = String(decodedText || "").trim();
+    setStatus("QR code found. Returning to the NSA application...");
+    if (qrScanner) {
+      try { await qrScanner.stop(); } catch (error) { console.warn("QR stop:", error); }
+      try { await qrScanner.clear(); } catch (error) { console.warn("QR clear:", error); }
+      qrScanner = null;
+    }
+    $("torchToggle").hidden = true;
+
+    const message = { type: "NSA_QR_SCAN", data: value };
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(message, "*");
+        setTimeout(function () { window.close(); }, 700);
+      } else if (window.parent && window.parent !== window) {
+        window.parent.postMessage(message, "*");
+        setTimeout(function () { window.close(); }, 700);
+      } else {
+        setStatus("QR scanned, but the NSA application window was not found. Reopen the scanner from the application to return the result.\nQR: " + value);
+      }
+    } catch (error) {
+      console.error("Could not return QR result:", error);
+      setStatus("QR scanned, but the result could not be returned. Reopen the scanner from the NSA application.\nQR: " + value);
+    }
+  }
+
+  function updateTorchControl() {
+    const button = $("torchToggle");
+    if (qrMode) return;
+    const track = stream && stream.getVideoTracks()[0];
+    let capabilities = null;
+    try { capabilities = track && track.getCapabilities ? track.getCapabilities() : null; } catch (_) {}
+    button.hidden = !(capabilities && Object.prototype.hasOwnProperty.call(capabilities, "torch"));
+    if (!torchOn) button.textContent = "TURN FLASHLIGHT ON";
+  }
+
+  async function toggleTorch() {
+    const enable = !torchOn;
+    try {
+      if (qrMode && qrScanner) {
+        await qrScanner.applyVideoConstraints({ advanced: [{ torch: enable }] });
+      } else {
+        const track = stream && stream.getVideoTracks()[0];
+        if (!track || !track.getCapabilities || !track.getCapabilities().torch) {
+          setStatus("Flashlight control is not supported by this camera or browser.");
+          return;
+        }
+        await track.applyConstraints({ advanced: [{ torch: enable }] });
+      }
+      torchOn = enable;
+      $("torchToggle").textContent = enable ? "TURN FLASHLIGHT OFF" : "TURN FLASHLIGHT ON";
+      $("torchToggle").setAttribute("aria-pressed", String(enable));
+    } catch (error) {
+      console.warn("Flashlight toggle failed:", error);
+      setStatus("This camera or browser could not switch the flashlight. The device may not support torch control.");
     }
   }
 
@@ -196,7 +328,9 @@
       $("video").srcObject = stream;
       $("cameraStage").hidden = false;
       await $("video").play();
-      setStatus("Camera ready. Tap Take New Photo to capture your photograph.");
+      $("passportFrame").hidden = false;
+      updateTorchControl();
+      setStatus("Camera ready. Align the head and shoulders inside the 35 × 45 mm portrait frame, then tap Take New Photo.");
     } catch (error) {
       console.warn("Passport camera startup:", error);
       setStatus("Camera did not open automatically. Tap Take New Photo and allow camera access.");
@@ -208,17 +342,16 @@
   async function startCodeCamera() {
     if (cameraBusy || stream) return;
     cameraBusy = true;
-    $("startCodeScanner").disabled = true;
     setStatus("Opening camera...");
     try {
       stream = await requestCamera();
       $("video").srcObject = stream;
       $("cameraStage").hidden = false;
       await $("video").play();
+      updateTorchControl();
       setStatus("Camera is open. Loading text recognition; this may take a few seconds...");
       await ensureOCRWorker();
       if (!stream) return;
-      $("startCodeScanner").hidden = true;
       $("detectedCodeBox").hidden = false;
       $("detectedCode").value = "";
       $("useDetectedCode").disabled = true;
@@ -227,12 +360,9 @@
       console.error("Code camera startup:", error);
       stopCamera(false);
       $("cameraStage").hidden = true;
-      $("startCodeScanner").hidden = false;
-      $("startCodeScanner").disabled = false;
-      setStatus("Could not start the camera/scanner: " + (error.message || error.name || "Unknown error") + ". Check camera permission and internet access, then retry.");
+      setStatus("Could not start the camera/scanner: " + (error.message || error.name || "Unknown error") + ". Check camera permission and internet access, then reopen this page.");
     } finally {
       cameraBusy = false;
-      $("startCodeScanner").disabled = false;
     }
   }
 
@@ -248,6 +378,9 @@
     }
     $("video").srcObject = null;
     $("cameraStage").hidden = true;
+    $("passportFrame").hidden = true;
+    $("torchToggle").hidden = true;
+    torchOn = false;
     if (showMessage) setStatus("Camera stopped.");
   }
 
@@ -572,10 +705,44 @@
       return;
     }
 
+    // Crop the exact area inside the on-screen 35:45 (7:9) guide. The video uses
+    // object-fit: cover, so first calculate the portion of the source video visible
+    // in the portrait viewport, then trim the 5% guide margin on each side.
+    const sourceWidth = video.videoWidth;
+    const sourceHeight = video.videoHeight;
+    const rect = video.getBoundingClientRect();
+    const boxWidth = rect.width || video.clientWidth;
+    const boxHeight = rect.height || video.clientHeight;
+    const sourceAspect = sourceWidth / sourceHeight;
+    const boxAspect = boxWidth / boxHeight;
+    let visibleX = 0, visibleY = 0;
+    let visibleWidth = sourceWidth, visibleHeight = sourceHeight;
+
+    if (sourceAspect > boxAspect) {
+      visibleWidth = sourceHeight * boxAspect;
+      visibleX = (sourceWidth - visibleWidth) / 2;
+    } else {
+      visibleHeight = sourceWidth / boxAspect;
+      visibleY = (sourceHeight - visibleHeight) / 2;
+    }
+
+    const cropX = Math.max(0, Math.floor(visibleX + visibleWidth * 0.05));
+    const cropY = Math.max(0, Math.floor(visibleY + visibleHeight * 0.05));
+    const cropWidth = Math.min(sourceWidth - cropX, Math.floor(visibleWidth * 0.90));
+    const cropHeight = Math.min(sourceHeight - cropY, Math.floor(visibleHeight * 0.90));
+    if (cropWidth < 20 || cropHeight < 20) {
+      setStatus("Could not calculate the passport frame. Please reopen the camera and try again.");
+      return;
+    }
+
     const canvas = $("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.width = 700;
+    canvas.height = 900;
+    const context = canvas.getContext("2d");
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+
     canvas.toBlob(blob => {
       if (!blob) {
         setStatus("Could not capture the photograph. Please try again.");
@@ -589,11 +756,11 @@
         stopCamera(false);
         $("retakePhoto").hidden = false;
         $("usePhoto").hidden = false;
-        setStatus("Photo captured. Choose Use This Photo or Retake Photo.");
+        setStatus("Photo captured in a 35 × 45 mm (7:9) portrait frame. Review it, then choose Use This Photo or Retake Photo.");
       };
       reader.onerror = () => setStatus("Could not prepare the photograph. Please try again.");
       reader.readAsDataURL(blob);
-    }, "image/jpeg", 0.9);
+    }, "image/jpeg", 0.92);
   }
 
   function retakePassportPhoto() {
@@ -630,12 +797,21 @@
   $("takeNewPhoto").addEventListener("click", capturePassportPhoto);
   $("retakePhoto").addEventListener("click", retakePassportPhoto);
   $("usePhoto").addEventListener("click", sendPassportPhoto);
-  $("startCodeScanner").addEventListener("click", startCodeCamera);
   $("readCodeNow").addEventListener("click", readCodeNow);
   $("useDetectedCode").addEventListener("click", sendDetectedCode);
+  $("torchToggle").addEventListener("click", toggleTorch);
+  $("detectedCode").addEventListener("input", function () {
+    const field = $("detectedCode");
+    const cleaned = field.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+    if (field.value !== cleaned) field.value = cleaned;
+    $("useDetectedCode").disabled = !/^[A-Z0-9]{6}$/.test(cleaned);
+  });
 
   window.addEventListener("beforeunload", () => {
     stopCamera(false);
+    if (qrScanner) {
+      qrScanner.stop().catch(() => {}).finally(() => { try { qrScanner.clear(); } catch (_) {} });
+    }
     if (ocrWorker) {
       ocrWorker.terminate().catch(() => {});
     }
