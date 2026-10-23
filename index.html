@@ -3,14 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#006b3f">
   <title>NSA Camera</title>
   <style>
     * { box-sizing: border-box; }
     body {
       font-family: Arial, sans-serif;
-      max-width: 600px;
-      margin: 20px auto;
-      padding: 14px;
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 12px;
       background: #f3f5f7;
       color: #17202a;
     }
@@ -25,7 +26,6 @@
     button {
       display: block;
       width: 100%;
-      box-sizing: border-box;
       padding: 14px;
       margin: 12px 0;
       border: 0;
@@ -38,6 +38,16 @@
       cursor: pointer;
     }
     button:disabled { opacity: .6; cursor: not-allowed; }
+    input {
+      width: 100%;
+      padding: 13px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-size: 20px;
+      letter-spacing: 3px;
+      text-align: center;
+      text-transform: uppercase;
+    }
     video, img {
       display: block;
       width: 100%;
@@ -45,27 +55,40 @@
       background: #111;
       border-radius: 9px;
     }
-    video { aspect-ratio: 4 / 3; object-fit: cover; }
+    video { aspect-ratio: 16 / 9; object-fit: cover; margin-top: 0; }
     #preview { background: #eee; }
+    #qrReader { width: 100%; margin: 12px 0; }
+    #qrReader video { width: 100% !important; margin: 0 !important; object-fit: cover; border-radius: 9px; }
+    body.passport-mode #cameraStage { width: min(100%, 360px); margin: 12px auto; }
+    body.passport-mode #video { aspect-ratio: 7 / 9; object-fit: cover; }
+    body.passport-mode #preview { width: min(100%, 360px); aspect-ratio: 7 / 9; object-fit: cover; margin: 12px auto; }
+    body.code-mode #video { aspect-ratio: 16 / 9; object-fit: cover; }
+    .passport-frame {
+      position: absolute;
+      inset: 5%;
+      border: 3px solid #fcd116;
+      border-radius: 8px;
+      box-shadow: 0 0 0 1000px rgba(0,0,0,.20);
+      pointer-events: none;
+    }
     #status {
       padding: 12px;
       background: #eef2f6;
       border-radius: 8px;
       overflow-wrap: anywhere;
+      white-space: pre-wrap;
       line-height: 1.45;
     }
     .camera-stage { position: relative; }
-    #qrReader { width: 100%; margin-top: 12px; }
-    #qrReader video { width: 100%; border-radius: 9px; }
     .scan-frame {
       position: absolute;
-      left: 7%;
-      top: 37%;
-      width: 86%;
-      height: 26%;
+      left: 5%;
+      top: 35%;
+      width: 90%;
+      height: 30%;
       border: 3px solid #fcd116;
       border-radius: 9px;
-      box-shadow: 0 0 0 1000px rgba(0,0,0,.13);
+      box-shadow: 0 0 0 1000px rgba(0,0,0,.16);
       pointer-events: none;
     }
     .hint {
@@ -74,6 +97,7 @@
       border-radius: 8px;
       font-size: 14px;
     }
+    .subtle { color: #475569; font-size: 13px; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -87,36 +111,45 @@
   </div>
 
   <div id="codeInstructions" class="hint" hidden>
-    Hold the complete six-character Office Capture Code inside the yellow frame. Keep the code in focus and hold the camera steady. The scanner will return the detected code to the monthly evaluation page.
+    This reads the six green letters/numbers as TEXT, not a QR code. Position only the six code characters inside the yellow frame. Move closer, avoid reflections, hold still, and check the detected code before sending it.
   </div>
 
   <div id="qrInstructions" class="hint" hidden>
-    Point the rear camera at an official NSA personnel QR code. Keep the entire code inside the scanner frame until it is recognised. The decoded text will be returned to the NSA Home page.
-  </div>
-
-  <div id="qrReader" hidden></div>
-  <div id="qrButtons" hidden>
-    <button id="startQrScanner" type="button">Start QR Scanner</button>
-    <button id="stopQrScanner" type="button" hidden>Stop Scanner</button>
+    Point the rear camera at an official NSA registration or evaluation QR code. Keep the entire code inside the scanner frame until it is recognised. The decoded text will be returned to the NSA application.
   </div>
 
   <div id="cameraStage" class="camera-stage" hidden>
     <video id="video" autoplay playsinline muted></video>
     <div id="scanFrame" class="scan-frame" hidden></div>
+    <div id="passportFrame" class="passport-frame" hidden></div>
   </div>
+
+  <div id="qrReader" hidden></div>
+  <button id="torchToggle" type="button" hidden aria-pressed="false">TURN FLASHLIGHT ON</button>
 
   <canvas id="canvas" hidden></canvas>
   <img id="preview" alt="Photograph preview" hidden>
 
-  <!-- Passport mode has only these three action buttons. -->
   <div id="passportButtons">
     <button id="takeNewPhoto" type="button">Take New Photo</button>
     <button id="retakePhoto" type="button" hidden>Retake Photo</button>
     <button id="usePhoto" type="button" hidden>Use This Photo</button>
   </div>
 
-  <!-- Code mode starts the camera automatically; this button is only a fallback. -->
-  <button id="startCodeScanner" type="button" hidden>Start Code Scanner</button>
+  <div id="qrButtons" hidden>
+    <button id="startQrScanner" type="button">START QR SCANNER</button>
+    <button id="stopQrScanner" type="button" hidden>STOP SCANNER</button>
+  </div>
+
+  <div id="codeControls" hidden>
+    <div id="detectedCodeBox" hidden>
+      <p><b>Detected six-character code</b></p>
+      <input id="detectedCode" type="text" maxlength="6" autocomplete="off" spellcheck="false" aria-label="Editable six-character capture code">
+      <button id="useDetectedCode" type="button" disabled>USE THIS CODE</button>
+      <button id="readCodeNow" type="button">READ CODE AGAIN</button>
+      <p class="subtle">Check the code above. Correct any character if necessary, then select USE THIS CODE. If the scan is wrong, select READ CODE AGAIN.</p>
+    </div>
+  </div>
 
   <p id="status" role="status" aria-live="polite">Preparing camera...</p>
 </main>
@@ -128,10 +161,15 @@
 
   const $ = id => document.getElementById(id);
   const params = new URLSearchParams(window.location.search);
-  const codeMode = params.get("mode") === "capture-code";
-  const qrMode = params.get("mode") === "qr-scan";
+  const mode = String(params.get("mode") || "").toLowerCase();
+  const codeMode = mode === "capture-code";
+  const qrMode = mode === "qr-scan" || mode === "qr";
 
   let stream = null;
+  let qrScanner = null;
+  let qrScannerStarting = false;
+  let qrScanLocked = false;
+  let torchOn = false;
   let facing = "environment";
   let selectedPhotoData = null;
   let cameraBusy = false;
@@ -141,68 +179,73 @@
   let ocrWorkerPromise = null;
   let ocrScriptPromise = null;
   let readingFrame = false;
-  let qrScanner = null;
-  let qrScannerStarting = false;
-  let qrScanLocked = false;
+  let thresholdIndex = 0;
+  let scanDeadline = 0;
+  let codeWasDelivered = false;
 
   function setStatus(message) {
-    $("status").textContent = message;
+    $("status").textContent = String(message || "");
   }
 
   function setupMode() {
     if (qrMode) {
-      document.title = "NSA QR Code Scanner";
+      document.body.classList.add("qr-mode");
+      document.title = "NSA QR Scanner";
       $("heading").textContent = "NSA QR Scanner";
       $("description").textContent = "Scan an NSA registration or evaluation QR code.";
       $("passportInstructions").hidden = true;
       $("passportButtons").hidden = true;
       $("codeInstructions").hidden = true;
-      $("qrInstructions").hidden = false;
+      $("codeControls").hidden = true;
       $("cameraStage").hidden = true;
       $("qrReader").hidden = false;
       $("qrButtons").hidden = false;
-      $("startQrScanner").hidden = false;
-      $("stopQrScanner").hidden = true;
-      setStatus("Starting QR scanner...");
-      startQrScanner();
-    } else if (codeMode) {
+      setStatus("Opening QR scanner...");
+      startQRScanner();
+      return;
+    }
+
+    if (codeMode) {
+      document.body.classList.add("code-mode");
       document.title = "NSA Office Capture Code Scanner";
       $("heading").textContent = "Office Capture Code Scanner";
-      $("description").textContent = "Automatically read the six-character code for monthly evaluation.";
+      $("description").textContent = "Read the six-character office capture code for monthly evaluation.";
       $("passportInstructions").hidden = true;
       $("passportButtons").hidden = true;
       $("codeInstructions").hidden = false;
+      $("codeControls").hidden = false;
       $("qrInstructions").hidden = true;
       $("qrReader").hidden = true;
       $("qrButtons").hidden = true;
       $("scanFrame").hidden = false;
-      $("startCodeScanner").hidden = false;
-      $("startCodeScanner").textContent = "Start Code Scanner";
-      setStatus("Requesting camera access...");
+      $("passportFrame").hidden = true;
+      setStatus("Starting camera and text recognition...");
       startCodeCamera();
-    } else {
-      document.title = "NSA Passport Camera";
-      $("heading").textContent = "NSA Passport Camera";
-      $("description").textContent = "Take a passport photograph and send it back to the registration page.";
-      $("passportInstructions").hidden = false;
-      $("passportButtons").hidden = false;
-      $("codeInstructions").hidden = true;
-      $("qrInstructions").hidden = true;
-      $("qrReader").hidden = true;
-      $("qrButtons").hidden = true;
-      $("startCodeScanner").hidden = true;
-      setStatus("Starting camera for passport photography...");
-      // Try opening the camera on load. If permission requires a user action,
-      // the Take New Photo button will start it instead.
-      startPassportCamera();
+      return;
     }
+
+    document.body.classList.add("passport-mode");
+    document.title = "NSA Passport Camera";
+    $("heading").textContent = "NSA Passport Camera";
+    $("description").textContent = "Take a passport photograph and send it back to the registration page.";
+    $("passportInstructions").hidden = false;
+    $("passportButtons").hidden = false;
+    $("codeInstructions").hidden = true;
+    $("codeControls").hidden = true;
+    $("qrInstructions").hidden = true;
+    $("qrReader").hidden = true;
+    $("qrButtons").hidden = true;
+    $("scanFrame").hidden = true;
+    $("passportFrame").hidden = false;
+    setStatus("Starting camera for passport photography...");
+    startPassportCamera();
   }
 
-  async function startQrScanner() {
+  async function startQRScanner() {
     if (qrScannerStarting || qrScanner) return;
     if (!window.Html5Qrcode) {
+      setStatus("The QR scanner library could not load. Check your internet connection and try again.");
       $("startQrScanner").hidden = false;
-      setStatus("The QR scanning library could not be loaded. Check your internet connection, then try again.");
       return;
     }
 
@@ -210,8 +253,7 @@
     qrScannerStarting = true;
     $("startQrScanner").disabled = true;
     setStatus("Requesting camera access for QR scanning...");
-
-    const instance = new window.Html5Qrcode("qrReader");
+    const instance = new window.Html5Qrcode("qrReader", { verbose: false });
     qrScanner = instance;
 
     try {
@@ -229,20 +271,20 @@
           setStatus("QR code detected. Returning the result to the NSA application...");
           deliverQR(decodedText);
         },
-        function () {
-          // Frame-by-frame decode misses are normal while scanning.
-        }
+        function () { /* No-QR-found frames are normal while scanning. */ }
       );
 
       $("startQrScanner").hidden = true;
       $("stopQrScanner").hidden = false;
-      setStatus("Camera active. Point it at the official NSA QR code.");
+      await updateTorchControl();
+      setStatus("Camera active. Point it at the official NSA QR code; the result will be returned automatically.");
     } catch (error) {
       console.error("QR scanner startup:", error);
       qrScanner = null;
       try { await instance.clear(); } catch (clearError) { console.warn("QR scanner cleanup:", clearError); }
       $("startQrScanner").hidden = false;
       $("stopQrScanner").hidden = true;
+      $("torchToggle").hidden = true;
       setStatus("Could not start the QR scanner: " + (error.message || error.name || "Unknown error") + ". Check camera permission and try again.");
     } finally {
       qrScannerStarting = false;
@@ -250,9 +292,13 @@
     }
   }
 
-  async function stopQrScanner(showMessage) {
+  async function stopQRScanner(showMessage) {
     const instance = qrScanner;
     qrScanner = null;
+    torchOn = false;
+    $("torchToggle").hidden = true;
+    $("torchToggle").textContent = "TURN FLASHLIGHT ON";
+    $("torchToggle").setAttribute("aria-pressed", "false");
 
     if (instance) {
       try { await instance.stop(); } catch (error) { console.warn("QR scanner stop:", error); }
@@ -274,19 +320,81 @@
       return;
     }
 
-    const parent = window.opener;
-    if (!parent || parent.closed) {
-      await stopQrScanner(false);
-      setStatus("QR code detected, but the NSA application window was not found. Reopen the scanner from the NSA Home page.");
-      return;
+    await stopQRScanner(false);
+    const delivered = postToApplication({ type: "NSA_QR_SCAN", data: value });
+    if (delivered === "opener") {
+      setStatus("QR scanned successfully. Returning to the NSA application...");
+      window.setTimeout(function () {
+        try { window.close(); } catch (error) { console.warn("Could not close scanner window:", error); }
+      }, 700);
+    } else if (delivered === "parent") {
+      setStatus("QR scanned successfully. The result has been sent to the NSA application.");
+    } else {
+      setStatus("QR code detected, but the NSA application window was not found. Reopen the scanner from the NSA Home page.\n\nScanned content:\n" + value);
+    }
+  }
+
+  /* Send scanner results back to the page that opened this camera. */
+  function postToApplication(message) {
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(message, "*");
+        return "opener";
+      }
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(message, "*");
+        return "parent";
+      }
+    } catch (error) {
+      console.error("Could not return scanner result:", error);
+    }
+    return "none";
+  }
+
+  async function updateTorchControl() {
+    const button = $("torchToggle");
+    let capabilities = null;
+
+    try {
+      if (qrMode && qrScanner) {
+        if (typeof qrScanner.getRunningTrackCameraCapabilities === "function") {
+          capabilities = qrScanner.getRunningTrackCameraCapabilities();
+        } else if (typeof qrScanner.getRunningTrackCapabilities === "function") {
+          capabilities = qrScanner.getRunningTrackCapabilities();
+        }
+      } else {
+        const track = stream && stream.getVideoTracks()[0];
+        capabilities = track && track.getCapabilities ? track.getCapabilities() : null;
+      }
+    } catch (error) {
+      capabilities = null;
     }
 
-    await stopQrScanner(false);
-    parent.postMessage({ type: "NSA_QR_SCAN", data: value }, "*");
-    setStatus("QR scanned successfully. Returning to the NSA application...");
-    window.setTimeout(function () {
-      try { window.close(); } catch (error) { console.warn("Could not close QR scanner window:", error); }
-    }, 700);
+    const supported = !!(capabilities && capabilities.torch);
+    button.hidden = !supported;
+    if (!torchOn) button.textContent = "TURN FLASHLIGHT ON";
+  }
+
+  async function toggleTorch() {
+    const enable = !torchOn;
+    try {
+      if (qrMode && qrScanner) {
+        await qrScanner.applyVideoConstraints({ advanced: [{ torch: enable }] });
+      } else {
+        const track = stream && stream.getVideoTracks()[0];
+        if (!track || !track.getCapabilities || !track.getCapabilities().torch) {
+          setStatus("Flashlight control is not supported by this camera or browser.");
+          return;
+        }
+        await track.applyConstraints({ advanced: [{ torch: enable }] });
+      }
+      torchOn = enable;
+      $("torchToggle").textContent = enable ? "TURN FLASHLIGHT OFF" : "TURN FLASHLIGHT ON";
+      $("torchToggle").setAttribute("aria-pressed", String(enable));
+    } catch (error) {
+      console.warn("Flashlight toggle failed:", error);
+      setStatus("This camera or browser could not switch the flashlight. The device may not support torch control.");
+    }
   }
 
   async function requestCamera() {
@@ -296,8 +404,8 @@
     return navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: facing },
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
       },
       audio: false
     });
@@ -311,10 +419,12 @@
       $("video").srcObject = stream;
       $("cameraStage").hidden = false;
       await $("video").play();
-      setStatus("Camera ready. Tap Take New Photo to capture your photograph.");
+      $("passportFrame").hidden = false;
+      await updateTorchControl();
+      setStatus("Camera ready. Align the head and shoulders inside the 35 × 45 mm portrait frame, then tap Take New Photo.");
     } catch (error) {
       console.warn("Passport camera startup:", error);
-      setStatus("Camera is not ready yet. Tap Take New Photo and allow camera access.");
+      setStatus("Camera did not open automatically. Tap Take New Photo and allow camera access.");
     } finally {
       cameraBusy = false;
     }
@@ -323,29 +433,27 @@
   async function startCodeCamera() {
     if (cameraBusy || stream) return;
     cameraBusy = true;
-    $("startCodeScanner").disabled = true;
-    setStatus("Opening camera for code scanning...");
+    setStatus("Opening camera...");
     try {
       stream = await requestCamera();
       $("video").srcObject = stream;
       $("cameraStage").hidden = false;
       await $("video").play();
-      setStatus("Camera ready. Loading text recognition...");
+      await updateTorchControl();
+      setStatus("Camera is open. Loading text recognition; this may take a few seconds...");
       await ensureOCRWorker();
       if (!stream) return;
-      scanActive = true;
-      $("startCodeScanner").hidden = true;
-      setStatus("Scanning. Keep the six-character code inside the yellow frame.");
-      scheduleScan(250);
+      $("detectedCodeBox").hidden = false;
+      $("detectedCode").value = "";
+      $("useDetectedCode").disabled = true;
+      beginTimedScan("Scanning the six text characters. Keep the code inside the yellow frame.");
     } catch (error) {
       console.error("Code camera startup:", error);
       stopCamera(false);
-      $("startCodeScanner").hidden = false;
-      $("startCodeScanner").disabled = false;
-      setStatus("Could not start the camera/scanner: " + (error.message || error.name || "Unknown error"));
+      $("cameraStage").hidden = true;
+      setStatus("Could not start the camera/scanner: " + (error.message || error.name || "Unknown error") + ". Check camera permission and internet access, then reopen this page.");
     } finally {
       cameraBusy = false;
-      $("startCodeScanner").disabled = false;
     }
   }
 
@@ -361,6 +469,11 @@
     }
     $("video").srcObject = null;
     $("cameraStage").hidden = true;
+    $("passportFrame").hidden = true;
+    $("torchToggle").hidden = true;
+    torchOn = false;
+    $("torchToggle").textContent = "TURN FLASHLIGHT ON";
+    $("torchToggle").setAttribute("aria-pressed", "false");
     if (showMessage) setStatus("Camera stopped.");
   }
 
@@ -369,11 +482,11 @@
     if (ocrScriptPromise) return ocrScriptPromise;
     ocrScriptPromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
       script.onload = resolve;
       script.onerror = () => {
         ocrScriptPromise = null;
-        reject(new Error("Could not load text recognition. Check the internet connection."));
+        reject(new Error("Could not load text recognition from the CDN. Check the internet connection."));
       };
       document.head.appendChild(script);
     });
@@ -388,7 +501,9 @@
       const worker = await window.Tesseract.createWorker("eng", 1);
       await worker.setParameters({
         tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-        tessedit_pageseg_mode: "7"
+        tessedit_pageseg_mode: "7",
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300"
       });
       ocrWorker = worker;
       return worker;
@@ -401,31 +516,83 @@
     }
   }
 
-  function buildOCRCanvas() {
+  function buildOCRCanvases() {
     const video = $("video");
-    if (!video.videoWidth || !video.videoHeight) return null;
-
+    if (!video.videoWidth || !video.videoHeight) return [];
     const sourceWidth = video.videoWidth;
     const sourceHeight = video.videoHeight;
-    const cropWidth = Math.floor(sourceWidth * 0.86);
-    const cropHeight = Math.floor(sourceHeight * 0.28);
-    const cropX = Math.floor((sourceWidth - cropWidth) / 2);
-    const cropY = Math.floor((sourceHeight - cropHeight) / 2);
-    const canvas = document.createElement("canvas");
-    canvas.width = cropWidth * 2;
-    canvas.height = cropHeight * 2;
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    context.filter = "grayscale(1) contrast(1.5)";
-    context.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
-    context.filter = "none";
-    return canvas;
+    const rect = video.getBoundingClientRect();
+    const boxWidth = rect.width || video.clientWidth;
+    const boxHeight = rect.height || video.clientHeight;
+    if (!boxWidth || !boxHeight) return [];
+
+    const sourceAspect = sourceWidth / sourceHeight;
+    const boxAspect = boxWidth / boxHeight;
+    let visibleX = 0, visibleY = 0;
+    let visibleWidth = sourceWidth, visibleHeight = sourceHeight;
+    if (sourceAspect > boxAspect) {
+      visibleWidth = sourceHeight * boxAspect;
+      visibleX = (sourceWidth - visibleWidth) / 2;
+    } else {
+      visibleHeight = sourceWidth / boxAspect;
+      visibleY = (sourceHeight - visibleHeight) / 2;
+    }
+
+    const cropX = Math.max(0, Math.floor(visibleX + visibleWidth * 0.05));
+    const cropY = Math.max(0, Math.floor(visibleY + visibleHeight * 0.35));
+    const cropWidth = Math.min(sourceWidth - cropX, Math.floor(visibleWidth * 0.90));
+    const cropHeight = Math.min(sourceHeight - cropY, Math.floor(visibleHeight * 0.30));
+    if (cropWidth < 20 || cropHeight < 10) return [];
+
+    const enlarged = document.createElement("canvas");
+    enlarged.width = cropWidth * 4;
+    enlarged.height = cropHeight * 4;
+    const ectx = enlarged.getContext("2d", { willReadFrequently: true });
+    ectx.imageSmoothingEnabled = true;
+    ectx.imageSmoothingQuality = "high";
+    ectx.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, enlarged.width, enlarged.height);
+    const original = ectx.getImageData(0, 0, enlarged.width, enlarged.height);
+    const variants = [];
+
+    [85, 115, 145, 175].forEach(threshold => {
+      const canvas = document.createElement("canvas");
+      canvas.width = enlarged.width;
+      canvas.height = enlarged.height;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const out = ctx.createImageData(enlarged.width, enlarged.height);
+      const srcData = original.data;
+      const dstData = out.data;
+      for (let i = 0; i < srcData.length; i += 4) {
+        const value = srcData[i] < threshold ? 0 : 255;
+        dstData[i] = value;
+        dstData[i + 1] = value;
+        dstData[i + 2] = value;
+        dstData[i + 3] = 255;
+      }
+      ctx.putImageData(out, 0, 0);
+      variants.push(canvas);
+    });
+    return variants;
   }
 
   function findCaptureCode(text) {
     const lines = String(text || "").toUpperCase().split(/\r?\n/);
-    for (const line of lines) {
-      const boundaryMatch = line.match(/(?:^|[^A-Z0-9])([A-Z0-9]{6})(?:$|[^A-Z0-9])/);
-      if (boundaryMatch) return boundaryMatch[1];
+    for (const originalLine of lines) {
+      const line = originalLine.trim();
+      const tokenMatches = line.match(/(?:^|[^A-Z0-9])([A-Z0-9]{6})(?=$|[^A-Z0-9])/g);
+      if (tokenMatches) {
+        for (const token of tokenMatches) {
+          const candidate = token.replace(/[^A-Z0-9]/g, "");
+          if (/^[A-Z0-9]{6}$/.test(candidate)) return candidate;
+        }
+      }
+      const spacedMatches = line.match(/(?:^|[^A-Z0-9])([A-Z0-9](?:[ \t-]*[A-Z0-9]){5})(?=$|[^A-Z0-9])/g);
+      if (spacedMatches) {
+        for (const token of spacedMatches) {
+          const candidate = token.replace(/[^A-Z0-9]/g, "");
+          if (/^[A-Z0-9]{6}$/.test(candidate)) return candidate;
+        }
+      }
       const compact = line.replace(/[^A-Z0-9]/g, "");
       if (/^[A-Z0-9]{6}$/.test(compact)) return compact;
     }
@@ -434,61 +601,190 @@
 
   function scheduleScan(delay) {
     if (!scanActive) return;
-    scanTimer = setTimeout(scanFrame, delay || 800);
+    if (scanTimer) clearTimeout(scanTimer);
+    scanTimer = setTimeout(scanFrame, delay == null ? 100 : delay);
+  }
+
+  function beginTimedScan(message) {
+    if (scanTimer) {
+      clearTimeout(scanTimer);
+      scanTimer = null;
+    }
+    scanActive = true;
+    scanDeadline = Date.now() + 5000;
+    thresholdIndex = 0;
+    $("detectedCodeBox").hidden = false;
+    $("detectedCode").value = "";
+    $("useDetectedCode").disabled = true;
+    setStatus(message);
+    scheduleScan(20);
   }
 
   async function scanFrame() {
     if (!scanActive || readingFrame) return;
-    const canvas = buildOCRCanvas();
-    if (!canvas) {
-      scheduleScan(400);
+    if (Date.now() >= scanDeadline) {
+      scanActive = false;
+      scanTimer = null;
+      $("detectedCodeBox").hidden = false;
+      $("useDetectedCode").disabled = true;
+      setStatus("No code detected in this scan. Keep the code inside the yellow frame and tap READ CODE AGAIN to retry.");
       return;
     }
+
+    const canvases = buildOCRCanvases();
+    if (!canvases.length) {
+      scheduleScan(100);
+      return;
+    }
+
     readingFrame = true;
     try {
+      const canvas = canvases[thresholdIndex % canvases.length];
+      thresholdIndex += 1;
+      await ocrWorker.setParameters({ tessedit_pageseg_mode: "7" });
       const result = await ocrWorker.recognize(canvas);
-      if (!scanActive) return;
-      const code = findCaptureCode(result && result.data ? result.data.text : "");
+      const rawText = result && result.data ? result.data.text : "";
+      const code = findCaptureCode(rawText);
       if (code) {
-        deliverCode(code);
+        scanActive = false;
+        if (scanTimer) {
+          clearTimeout(scanTimer);
+          scanTimer = null;
+        }
+        $("detectedCodeBox").hidden = false;
+        $("detectedCode").value = code;
+        $("useDetectedCode").disabled = false;
+        setStatus("Code detected: " + code + ". Check it, then tap USE THIS CODE. If it is incorrect, tap READ CODE AGAIN.");
         return;
       }
-      setStatus("Reading code... Keep all six characters inside the yellow frame and hold steady.");
+      if (Date.now() >= scanDeadline) {
+        scanActive = false;
+        $("detectedCodeBox").hidden = false;
+        $("useDetectedCode").disabled = true;
+        setStatus("No code detected in this scan. Keep the code inside the yellow frame and tap READ CODE AGAIN to retry.");
+      } else {
+        setStatus("Reading the code… keep the six characters large, steady and inside the yellow frame.");
+        scheduleScan(80);
+      }
     } catch (error) {
       console.error("OCR scan error:", error);
-      setStatus("Could not read the code clearly. Adjust focus and lighting.");
+      scanActive = false;
+      $("detectedCodeBox").hidden = false;
+      $("useDetectedCode").disabled = true;
+      setStatus("Text recognition encountered a problem. Tap READ CODE AGAIN to retry.");
     } finally {
       readingFrame = false;
-      if (scanActive) scheduleScan(850);
+      if (scanActive && !scanTimer) scheduleScan(80);
     }
   }
 
-  function deliverCode(code) {
-    if (!/^[A-Z0-9]{6}$/.test(code)) return;
-    scanActive = false;
-    stopCamera(false);
-    if (!window.opener || window.opener.closed) {
-      setStatus("Code detected: " + code + ". Reopen the scanner from the monthly evaluation page.");
+  async function readCodeNow() {
+    if (!codeMode) return;
+    if (!stream) {
+      await startCodeCamera();
       return;
     }
-    window.opener.postMessage({ type: "NSA_CAPTURE_CODE", code: code }, "*");
-    setStatus("Code " + code + " detected and sent to the monthly evaluation page. Return to that page to continue.");
+    if (!ocrWorker) {
+      setStatus("Text recognition is still loading. Please wait, then tap READ CODE AGAIN.");
+      return;
+    }
+    if (readingFrame) {
+      setStatus("The camera is reading a frame. Please wait a moment.");
+      return;
+    }
+    beginTimedScan("Reading the current camera view for up to five seconds…");
+  }
+
+  function sendDetectedCode() {
+    const code = String($("detectedCode").value || "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+      setStatus("Enter or scan a valid six-character code before continuing.");
+      return;
+    }
+    if (codeWasDelivered) return;
+
+    const returnUrlValue = params.get("returnUrl");
+    if (returnUrlValue) {
+      try {
+        const returnUrl = new URL(returnUrlValue);
+        if (returnUrl.protocol !== "https:" || returnUrl.hostname !== "script.google.com") {
+          setStatus("The return address is not a recognised NSA WAWM Apps Script address. Reopen SCAN CODE from the monthly evaluation page.");
+          return;
+        }
+        returnUrl.searchParams.set("captureCode", code);
+        returnUrl.searchParams.set("captureCodeSource", "ocr");
+        codeWasDelivered = true;
+        stopCamera(false);
+        setStatus("Code confirmed. Returning to the monthly evaluation form...");
+        window.location.replace(returnUrl.toString());
+        return;
+      } catch (error) {
+        console.error("Invalid scanner return URL:", error);
+        setStatus("Could not return to the evaluation form. Reopen SCAN CODE from the monthly evaluation page.");
+        return;
+      }
+    }
+
+    const delivered = postToApplication({ type: "NSA_CAPTURE_CODE", code: code });
+    if (delivered === "none") {
+      setStatus("Code confirmed: " + code + ". No NSA application window was found. Reopen the scanner from the monthly evaluation page.");
+      return;
+    }
+    codeWasDelivered = true;
+    stopCamera(false);
+    setStatus("Code " + code + " was sent to the NSA application. Returning...");
+    if (delivered === "opener") {
+      window.setTimeout(function () {
+        try { window.close(); } catch (error) { console.warn("Could not close scanner window:", error); }
+      }, 700);
+    }
   }
 
   function capturePassportPhoto() {
     const video = $("video");
     if (!stream) {
       startPassportCamera();
+      setStatus("Opening camera. When it is ready, tap Take New Photo again.");
       return;
     }
     if (!video.videoWidth) {
       setStatus("Camera is still loading. Try again in a moment.");
       return;
     }
+
+    const sourceWidth = video.videoWidth;
+    const sourceHeight = video.videoHeight;
+    const rect = video.getBoundingClientRect();
+    const boxWidth = rect.width || video.clientWidth;
+    const boxHeight = rect.height || video.clientHeight;
+    const sourceAspect = sourceWidth / sourceHeight;
+    const boxAspect = boxWidth / boxHeight;
+    let visibleX = 0, visibleY = 0;
+    let visibleWidth = sourceWidth, visibleHeight = sourceHeight;
+    if (sourceAspect > boxAspect) {
+      visibleWidth = sourceHeight * boxAspect;
+      visibleX = (sourceWidth - visibleWidth) / 2;
+    } else {
+      visibleHeight = sourceWidth / boxAspect;
+      visibleY = (sourceHeight - visibleHeight) / 2;
+    }
+
+    const cropX = Math.max(0, Math.floor(visibleX + visibleWidth * 0.05));
+    const cropY = Math.max(0, Math.floor(visibleY + visibleHeight * 0.05));
+    const cropWidth = Math.min(sourceWidth - cropX, Math.floor(visibleWidth * 0.90));
+    const cropHeight = Math.min(sourceHeight - cropY, Math.floor(visibleHeight * 0.90));
+    if (cropWidth < 20 || cropHeight < 20) {
+      setStatus("Could not calculate the passport frame. Please reopen the camera and try again.");
+      return;
+    }
+
     const canvas = $("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.width = 700;
+    canvas.height = 900;
+    const context = canvas.getContext("2d");
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(blob => {
       if (!blob) {
         setStatus("Could not capture the photograph. Please try again.");
@@ -502,11 +798,11 @@
         stopCamera(false);
         $("retakePhoto").hidden = false;
         $("usePhoto").hidden = false;
-        setStatus("Photo captured. Choose Use This Photo or Retake Photo.");
+        setStatus("Photo captured in a 35 × 45 mm (7:9) portrait frame. Review it, then choose Use This Photo or Retake Photo.");
       };
       reader.onerror = () => setStatus("Could not prepare the photograph. Please try again.");
       reader.readAsDataURL(blob);
-    }, "image/jpeg", 0.9);
+    }, "image/jpeg", 0.92);
   }
 
   function retakePassportPhoto() {
@@ -515,6 +811,7 @@
     $("preview").removeAttribute("src");
     $("retakePhoto").hidden = true;
     $("usePhoto").hidden = true;
+    $("cameraStage").hidden = false;
     setStatus("Starting camera for a new photograph...");
     startPassportCamera();
   }
@@ -524,33 +821,44 @@
       setStatus("Take a photograph before selecting Use This Photo.");
       return;
     }
-    if (!window.opener || window.opener.closed) {
-      setStatus("Registration page not found. Reopen the camera from the registration form.");
+    const delivered = postToApplication({ type: "NSA_PASSPORT_PHOTO", dataUrl: selectedPhotoData });
+    if (delivered === "none") {
+      setStatus("Registration page not found. Reopen this camera from the registration form.");
       return;
     }
-    window.opener.postMessage({ type: "NSA_PASSPORT_PHOTO", dataUrl: selectedPhotoData }, "*");
-    setStatus("Photo sent to the registration page successfully. You may close this tab.");
+    setStatus("Photo sent to the registration page successfully. You may return to the registration form.");
+    if (delivered === "opener") {
+      window.setTimeout(function () {
+        try { window.close(); } catch (error) { console.warn("Could not close camera window:", error); }
+      }, 700);
+    }
   }
 
   $("takeNewPhoto").addEventListener("click", capturePassportPhoto);
   $("retakePhoto").addEventListener("click", retakePassportPhoto);
   $("usePhoto").addEventListener("click", sendPassportPhoto);
-  $("startCodeScanner").addEventListener("click", startCodeCamera);
-  $("startQrScanner").addEventListener("click", startQrScanner);
-  $("stopQrScanner").addEventListener("click", () => stopQrScanner(true));
+  $("readCodeNow").addEventListener("click", readCodeNow);
+  $("useDetectedCode").addEventListener("click", sendDetectedCode);
+  $("torchToggle").addEventListener("click", toggleTorch);
+  $("startQrScanner").addEventListener("click", startQRScanner);
+  $("stopQrScanner").addEventListener("click", () => stopQRScanner(true));
+  $("detectedCode").addEventListener("input", function () {
+    const field = $("detectedCode");
+    const cleaned = field.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+    if (field.value !== cleaned) field.value = cleaned;
+    $("useDetectedCode").disabled = !/^[A-Z0-9]{6}$/.test(cleaned);
+  });
 
-  window.addEventListener("beforeunload", () => {
+  window.addEventListener("beforeunload", function () {
     stopCamera(false);
     if (qrScanner) {
-      const activeQrScanner = qrScanner;
+      const activeScanner = qrScanner;
       qrScanner = null;
-      activeQrScanner.stop().catch(() => {}).finally(() => {
-        try { activeQrScanner.clear(); } catch (error) {}
+      activeScanner.stop().catch(() => {}).finally(() => {
+        try { activeScanner.clear(); } catch (error) { /* Best-effort cleanup. */ }
       });
     }
-    if (ocrWorker) {
-      ocrWorker.terminate().catch(() => {});
-    }
+    if (ocrWorker) ocrWorker.terminate().catch(() => {});
   });
 
   setupMode();
