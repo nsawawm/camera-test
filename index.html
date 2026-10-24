@@ -472,9 +472,9 @@
     }
 
     const supported = !!(capabilities && capabilities.torch);
-    // Always expose the QR flashlight control. Some mobile browsers support
-    // torch constraints but do not report capabilities.torch reliably.
-    button.hidden = qrMode ? false : !supported;
+    // Expose the flashlight control in every camera mode. Some mobile browsers
+    // support torch constraints but do not report capabilities.torch reliably.
+    button.hidden = false;
     button.dataset.torchSupported = supported ? "true" : "unknown";
     button.title = supported
       ? "Turn the rear-camera flashlight on or off"
@@ -489,8 +489,8 @@
         await qrScanner.applyVideoConstraints({ advanced: [{ torch: enable }] });
       } else {
         const track = stream && stream.getVideoTracks()[0];
-        if (!track || !track.getCapabilities || !track.getCapabilities().torch) {
-          setStatus("Flashlight control is not supported by this camera or browser.");
+        if (!track) {
+          setStatus("The camera is not active. Start the camera before using the flashlight.");
           return;
         }
         await track.applyConstraints({ advanced: [{ torch: enable }] });
