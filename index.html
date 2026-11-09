@@ -338,19 +338,47 @@
     qrScannerStarting = true;
     $("startQrScanner").disabled = true;
     setStatus("Requesting camera access for QR scanning...");
-    const instance = new window.Html5Qrcode("qrReader", { verbose: false });
+    const instance = new window.Html5Qrcode("qrReader", {
+      verbose: false,
+      formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ],
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+    });
     qrScanner = instance;
 
     try {
+      // Prefer a camera whose device label identifies it as the rear camera.
+      // Fall back to facingMode when labels are unavailable or permission has
+      // not yet exposed device names.
+      let preferredCamera = { facingMode: { ideal: "environment" } };
+      try {
+        const cameras = await window.Html5Qrcode.getCameras();
+        if (cameras && cameras.length) {
+          const rear = cameras.find(camera => /back|rear|environment|world/i.test(camera.label || ""));
+          if (rear) preferredCamera = rear.id;
+          else if (cameras.length > 1) preferredCamera = cameras[cameras.length - 1].id;
+          else preferredCamera = cameras[0].id;
+        }
+      } catch (cameraListError) {
+        console.warn("Could not enumerate cameras; using rear-facing preference:", cameraListError);
+      }
       await instance.start(
-        { facingMode: "environment" },
+        preferredCamera,
         {
-          fps: 10,
+          fps: 18,
+          videoConstraints: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          },
+          formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ],
+          experimentalFeatures: {
+            useBarCodeDetectorIfSupported: true
+          },
           qrbox: function (viewfinderWidth, viewfinderHeight) {
             const edge = Math.max(140, Math.floor(Math.min(
-              viewfinderWidth * 0.76,
-              viewfinderHeight * 0.76,
-              300
+              viewfinderWidth * 0.84,
+              viewfinderHeight * 0.84,
+              360
             )));
             const target = $("qrTargetFrame");
             if (target) {
@@ -360,7 +388,8 @@
             return { width: edge, height: edge };
           },
           aspectRatio: 4 / 3,
-          rememberLastUsedCamera: true
+          disableFlip: false,
+          rememberLastUsedCamera: false
         },
         function (decodedText) {
           if (qrScanLocked) return;
@@ -814,7 +843,8 @@
     if (returnUrlValue) {
       try {
         const returnUrl = new URL(returnUrlValue);
-        if (returnUrl.protocol !== "https:" || returnUrl.hostname !== "script.google.com") {
+        const allowedReturnHosts = ["script.google.com", "script.googleusercontent.com"];
+        if (returnUrl.protocol !== "https:" || !allowedReturnHosts.includes(returnUrl.hostname)) {
           setStatus("The return address is not a recognised NSA WAWM Apps Script address. Reopen SCAN CODE from the monthly evaluation page.");
           return;
         }
