@@ -246,6 +246,9 @@
   let qrScanner = null;
   let qrScannerStarting = false;
   let qrScanLocked = false;
+  let nativeQrTimer = null;
+  let nativeQrBusy = false;
+  let nativeQrDetector = null;
   let torchOn = false;
   let facing = "environment";
   let selectedPhotoData = null;
@@ -325,6 +328,50 @@
     startPassportCamera();
   }
 
+  function handleQRDecoded(decodedText) {
+    if (qrScanLocked) return;
+    qrScanLocked = true;
+    $("qrTargetFrame").classList.add("is-detected");
+    setStatus("QR code detected. Returning the result to the NSA application...");
+    window.setTimeout(function () { deliverQR(decodedText); }, 300);
+  }
+
+  // Some phones decode dense QR codes more reliably with the browser's native
+  // BarcodeDetector operating on the camera's full-resolution video frame.
+  // html5-qrcode remains active as the cross-browser fallback.
+  function startNativeQRFallback() {
+    if (!("BarcodeDetector" in window)) return;
+    try {
+      nativeQrDetector = new window.BarcodeDetector({ formats: ["qr_code"] });
+      nativeQrTimer = window.setInterval(async function () {
+        if (qrScanLocked || nativeQrBusy || !qrScanner) return;
+        const video = $("qrReader").querySelector("video");
+        if (!video || video.readyState < 2 || !video.videoWidth) return;
+        nativeQrBusy = true;
+        try {
+          const results = await nativeQrDetector.detect(video);
+          if (results && results.length && results[0].rawValue) {
+            handleQRDecoded(results[0].rawValue);
+          }
+        } catch (error) {
+          // Native detection can reject transient frames on some devices.
+        } finally {
+          nativeQrBusy = false;
+        }
+      }, 220);
+    } catch (error) {
+      nativeQrDetector = null;
+      console.info("Native QR fallback unavailable; html5-qrcode remains active:", error);
+    }
+  }
+
+  function stopNativeQRFallback() {
+    if (nativeQrTimer) window.clearInterval(nativeQrTimer);
+    nativeQrTimer = null;
+    nativeQrDetector = null;
+    nativeQrBusy = false;
+  }
+
   async function startQRScanner() {
     if (qrScannerStarting || qrScanner) return;
     if (!window.Html5Qrcode) {
@@ -377,9 +424,9 @@
           },
           qrbox: function (viewfinderWidth, viewfinderHeight) {
             const edge = Math.max(140, Math.floor(Math.min(
-              viewfinderWidth * 0.94,
-              viewfinderHeight * 0.94,
-              520
+              viewfinderWidth * 0.97,
+              viewfinderHeight * 0.97,
+              760
             )));
             const target = $("qrTargetFrame");
             if (target) {
@@ -392,20 +439,13 @@
           disableFlip: false,
           rememberLastUsedCamera: false
         },
-        function (decodedText) {
-          if (qrScanLocked) return;
-          qrScanLocked = true;
-          $("qrTargetFrame").classList.add("is-detected");
-          setStatus("QR code detected. Returning the result to the NSA application...");
-          window.setTimeout(function () {
-            deliverQR(decodedText);
-          }, 420);
-        },
+        function (decodedText) { handleQRDecoded(decodedText); },
         function () { /* No-QR-found frames are normal while scanning. */ }
       );
 
       $("startQrScanner").hidden = true;
       $("stopQrScanner").hidden = false;
+      startNativeQRFallback();
       try {
         await instance.applyVideoConstraints({
           advanced: [
@@ -418,7 +458,7 @@
         console.info("Continuous camera focus controls are not exposed by this device/browser:", focusError);
       }
       await updateTorchControl();
-      setStatus("Camera active. Move close enough for the full QR code to fill most of the frame, hold steady, and allow autofocus to settle.");
+      setStatus("Camera active. Keep the entire QR code inside the frame. The scanner is using the high-resolution camera and, where supported, a second native QR decoder.");
     } catch (error) {
       console.error("QR scanner startup:", error);
       qrScanner = null;
@@ -434,6 +474,7 @@
   }
 
   async function stopQRScanner(showMessage) {
+    stopNativeQRFallback();
     const instance = qrScanner;
     qrScanner = null;
     torchOn = false;
