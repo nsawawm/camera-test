@@ -231,7 +231,7 @@
   <p id="status" role="status" aria-live="polite">Preparing camera...</p>
 </main>
 
-<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script>
 (function () {
   "use strict";
@@ -364,11 +364,12 @@
       await instance.start(
         preferredCamera,
         {
-          fps: 18,
+          fps: 20,
           videoConstraints: {
             facingMode: { ideal: "environment" },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
+            width: { ideal: 2560 },
+            height: { ideal: 1440 },
+            frameRate: { ideal: 30, max: 30 }
           },
           formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ],
           experimentalFeatures: {
@@ -376,9 +377,9 @@
           },
           qrbox: function (viewfinderWidth, viewfinderHeight) {
             const edge = Math.max(140, Math.floor(Math.min(
-              viewfinderWidth * 0.84,
-              viewfinderHeight * 0.84,
-              360
+              viewfinderWidth * 0.94,
+              viewfinderHeight * 0.94,
+              520
             )));
             const target = $("qrTargetFrame");
             if (target) {
@@ -405,8 +406,19 @@
 
       $("startQrScanner").hidden = true;
       $("stopQrScanner").hidden = false;
+      try {
+        await instance.applyVideoConstraints({
+          advanced: [
+            { focusMode: "continuous" },
+            { exposureMode: "continuous" },
+            { whiteBalanceMode: "continuous" }
+          ]
+        });
+      } catch (focusError) {
+        console.info("Continuous camera focus controls are not exposed by this device/browser:", focusError);
+      }
       await updateTorchControl();
-      setStatus("Camera active. Point it at the official NSA QR code; the result will be returned automatically.");
+      setStatus("Camera active. Move close enough for the full QR code to fill most of the frame, hold steady, and allow autofocus to settle.");
     } catch (error) {
       console.error("QR scanner startup:", error);
       qrScanner = null;
@@ -839,29 +851,8 @@
     }
     if (codeWasDelivered) return;
 
-    const returnUrlValue = params.get("returnUrl");
-    if (returnUrlValue) {
-      try {
-        const returnUrl = new URL(returnUrlValue);
-        const allowedReturnHosts = ["script.google.com", "script.googleusercontent.com"];
-        if (returnUrl.protocol !== "https:" || !allowedReturnHosts.includes(returnUrl.hostname)) {
-          setStatus("The return address is not a recognised NSA WAWM Apps Script address. Reopen SCAN CODE from the monthly evaluation page.");
-          return;
-        }
-        returnUrl.searchParams.set("captureCode", code);
-        returnUrl.searchParams.set("captureCodeSource", "ocr");
-        codeWasDelivered = true;
-        stopCamera(false);
-        setStatus("Code confirmed. Returning to the monthly evaluation form...");
-        window.location.replace(returnUrl.toString());
-        return;
-      } catch (error) {
-        console.error("Invalid scanner return URL:", error);
-        setStatus("Could not return to the evaluation form. Reopen SCAN CODE from the monthly evaluation page.");
-        return;
-      }
-    }
-
+    // Capture-code delivery always uses the popup opener message channel.
+    // This avoids deployment-host assumptions about Apps Script redirect URLs.
     const delivered = postToApplication({ type: "NSA_CAPTURE_CODE", code: code });
     if (delivered === "none") {
       setStatus("Code confirmed: " + code + ". No NSA application window was found. Reopen the scanner from the monthly evaluation page.");
